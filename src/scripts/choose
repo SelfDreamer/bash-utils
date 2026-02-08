@@ -1,0 +1,290 @@
+#!/usr/bin/env bash
+
+function cmd_choose() {
+    
+    function make_ansi() {
+        local fg=$1; local bg=$2; local seq=""
+        [[ -n "$fg" ]] && seq+="\e[38;5;${fg}m"
+        [[ -n "$bg" ]] && seq+="\e[48;5;${bg}m"
+        echo "$seq"
+    }
+
+    local options=()
+    local limit=1         
+    local height=10
+    local cursor_char="> "
+    local header=""
+    
+    local cursor_prefix="• " 
+    local selected_prefix="✓ "
+    local unselected_prefix="• "
+    
+    local ordered=false
+    local show_help=true
+    local pre_selected=""
+    local output_delimiter=$'\n' 
+    
+    local c_cursor_fg="212"     ; local c_cursor_bg=""
+    local c_header_fg="99"      ; local c_header_bg=""
+    local c_item_fg=""          ; local c_item_bg=""     
+    local c_selected_fg="212"   ; local c_selected_bg="" 
+    
+    function show_help_panel() {
+        cat <<EOF
+Usage: bash-utils choose [<options> ...] [flags]
+
+Choose an option from a list of choices
+
+Arguments:
+  [<options> ...]    Options to choose from.
+
+Flags:
+  -h, --help                Show context-sensitive help.
+      --limit=1             Maximum number of options to pick (0 for no limit)
+      --no-limit            Pick unlimited number of options
+      --height=10           Height of the list
+      --cursor="> "         Prefix for cursor position
+      --header=""           Header value
+      --selected=""         Options to start selected (comma separated)
+      --ordered             Maintain order of selected options
+      --no-show-help        Hide help keybinds
+
+Style Flags:
+  --cursor.foreground       Foreground Color
+  --header.foreground       Foreground Color
+  --item.foreground         Foreground Color
+  --selected.foreground     Foreground Color
+EOF
+    }
+
+    local args_options=()
+    local parse_args=()
+    
+    while [[ $# -gt 0 ]]; do
+        if [[ "$1" == -* ]]; then
+            parse_args+=("$1")
+            if [[ "$1" != *=* && "$1" != --no-* && "$1" != --ordered ]]; then
+                 if [[ -n "$2" && "$2" != -* ]]; then
+                    parse_args+=("$2")
+                    shift
+                 fi
+            fi
+        else
+            args_options+=("$1")
+        fi
+        shift
+    done
+    
+    set -- "${parse_args[@]}"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) show_help_panel; return 0 ;;
+            --limit=*) limit="${1#*=}"; shift ;;
+            --limit)   limit="$2"; shift 2 ;;
+            --no-limit) limit=0; shift ;;
+            --height=*) height="${1#*=}"; shift ;;
+            --height)   height="$2"; shift 2 ;;
+            --cursor=*) cursor_char="${1#*=}"; shift ;;
+            --cursor)   cursor_char="$2"; shift 2 ;;
+            --header=*) header="${1#*=}"; shift ;;
+            --header)   header="$2"; shift 2 ;;
+            --selected=*) pre_selected="${1#*=}"; shift ;;
+            --selected)   pre_selected="$2"; shift 2 ;;
+            --ordered) ordered=true; shift ;;
+            --no-show-help) show_help=false; shift ;;
+            --cursor.foreground=*)   c_cursor_fg="${1#*=}"; shift ;;
+            --cursor.foreground)     c_cursor_fg="$2"; shift 2 ;;
+            --header.foreground=*)   c_header_fg="${1#*=}"; shift ;;
+            --header.foreground)     c_header_fg="$2"; shift 2 ;;
+            --item.foreground=*)     c_item_fg="${1#*=}"; shift ;;
+            --item.foreground)       c_item_fg="$2"; shift 2 ;;
+            --selected.foreground=*) c_selected_fg="${1#*=}"; shift ;;
+            --selected.foreground)   c_selected_fg="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    if [[ ${#args_options[@]} -gt 0 ]]; then
+        options=("${args_options[@]}")
+    else
+        if [ ! -t 0 ]; then
+            while IFS= read -r line; do
+                options+=("$line")
+            done
+        fi
+    fi
+
+    if [[ ${#options[@]} -eq 0 ]]; then
+        echo "no options provided, see --help parameter" 
+        exit 1 
+    fi
+
+    local total=${#options[@]}
+    local selected_status=()
+    local current_idx=0
+    local scroll_offset=0
+    local final_selection="" 
+    
+    for ((i=0; i<total; i++)); do selected_status[$i]=0; done
+
+    if [[ -n "$pre_selected" ]]; then
+        local old_ifs=$IFS
+        IFS=',' read -ra pre_arr <<< "$pre_selected"
+        IFS=$old_ifs
+        for item in "${pre_arr[@]}"; do
+            item=$(echo "$item" | xargs)
+            for ((i=0; i<total; i++)); do
+                if [[ "${options[$i]}" == "$item" ]]; then
+                    selected_status[$i]=1
+                fi
+            done
+        done
+    fi
+
+    local s_cursor="$(make_ansi "$c_cursor_fg" "$c_cursor_bg")"
+    local s_header="$(make_ansi "$c_header_fg" "$c_header_bg")"
+    local s_item="$(make_ansi "$c_item_fg" "$c_item_bg")"
+    local s_selected="$(make_ansi "$c_selected_fg" "$c_selected_bg")"
+    local reset="\e[0m"
+    local dimmed="\e[2m"
+
+    tput civis >&2
+    trap 'tput cnorm >&2' EXIT
+
+    function draw() {
+        if (( current_idx < scroll_offset )); then
+            scroll_offset=$current_idx
+        elif (( current_idx >= scroll_offset + height )); then
+            scroll_offset=$(( current_idx - height + 1 ))
+        fi
+
+        if [[ -n "$header" ]]; then
+            echo -e "${s_header}${header}${reset}\e[K" >&2
+        fi
+
+        for (( i=0; i<height; i++ )); do
+            local idx=$(( scroll_offset + i ))
+            
+            if (( idx >= total )); then
+                echo -e "\e[K" >&2 
+                continue
+            fi
+
+            local item="${options[$idx]}"
+            local is_sel=${selected_status[$idx]}
+            local prefix=""
+            local line_color="$s_item"
+            local line_cursor="  "
+
+            if (( idx == current_idx )); then
+                line_cursor="${s_cursor}${cursor_char}${reset}"
+                if [[ $limit -eq 1 ]]; then
+                    line_color="$s_cursor" 
+                fi
+            else
+                printf -v line_cursor "%*s" ${#cursor_char} ""
+            fi
+
+            if [[ $limit -ne 1 ]]; then
+                if (( is_sel == 1 )); then
+                    prefix="${s_selected}${selected_prefix}${reset}"
+                    line_color="$s_selected"
+                else
+                    if (( idx == current_idx )); then
+                        prefix="${s_cursor}${cursor_prefix}${reset}"
+                    else
+                        prefix="${dimmed}${unselected_prefix}${reset}"
+                    fi
+                fi
+            fi
+
+            echo -e "${line_cursor}${prefix}${line_color}${item}${reset}\e[K" >&2
+        done
+
+        if [[ "$show_help" == "true" ]]; then
+            local help_msg=""
+            if [[ $limit -eq 1 ]]; then
+                help_msg="${dimmed}↑/↓ navigate • enter select${reset}"
+            else
+                help_msg="${dimmed}↑/↓ navigate • space toggle • enter confirm${reset}"
+            fi
+            echo -e "${help_msg}\e[K" >&2
+        fi
+    }
+
+    while true; do
+        local header_lines=0
+        if [[ -n "$header" ]]; then
+            header_lines=$(echo -e "$header" | grep -c "^")
+        fi
+        
+        local footer_lines=0
+        [[ "$show_help" == "true" ]] && footer_lines=1
+        
+        local total_lines=$(( header_lines + height + footer_lines ))
+
+        draw
+
+        IFS= read -rsn1 key
+        case "$key" in
+            $'\x1b')
+                read -rsn2 -t 0.1 next_chars
+                case "$next_chars" in
+                    '[A') ((current_idx--)); if ((current_idx < 0)); then current_idx=$((total - 1)); fi ;;
+                    '[B') ((current_idx++)); if ((current_idx >= total)); then current_idx=0; fi ;;
+                esac
+                ;;
+            'k') ((current_idx--)); if ((current_idx < 0)); then current_idx=0; fi ;;
+            'j') ((current_idx++)); if ((current_idx >= total)); then current_idx=$((total - 1)); fi ;;
+            
+            " ") 
+                if [[ $limit -ne 1 ]]; then
+                    selected_status[$current_idx]=$(( 1 - selected_status[$current_idx] ))
+                fi
+                ;;
+            
+            "") # Enter
+                if [[ $limit -eq 1 ]]; then
+                    final_selection="${options[$current_idx]}"
+                else
+                    local first=true
+                    for ((i=0; i<total; i++)); do
+                        if (( selected_status[i] == 1 )); then
+                            if [ "$first" = true ]; then
+                                final_selection="${options[$i]}"
+                                first=false
+                            else
+                                final_selection+="${output_delimiter}${options[$i]}"
+                            fi
+                        fi
+                    done
+                fi
+                break 
+                ;;
+                
+            'q') 
+                echo -ne "\033[${total_lines}A" >&2
+                for ((k=0; k<total_lines; k++)); do echo -e "\e[K" >&2; done
+                echo -ne "\033[${total_lines}A" >&2
+                return 1 
+                ;;
+        esac
+
+        echo -ne "\033[${total_lines}A" >&2
+    done
+
+    echo -ne "\033[${total_lines}A" >&2
+    for ((k=0; k<total_lines; k++)); do echo -e "\e[K" >&2; done
+    echo -ne "\033[${total_lines}A" >&2
+    
+    tput cnorm >&2
+    
+    if [[ -n "$final_selection" ]]; then
+        printf "%s\n" "$final_selection"
+    fi
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    cmd_choose "${@}"
+fi

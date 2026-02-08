@@ -1,0 +1,257 @@
+#!/usr/bin/env bash
+
+function cmd_input() {
+    
+    local ESC=$'\e'
+    local CR=$'\r'
+
+    function make_ansi() {
+        local fg=$1; local bg=$2; local seq=""
+        [[ -n "$fg" ]] && seq+="${ESC}[38;5;${fg}m"
+        [[ -n "$bg" ]] && seq+="${ESC}[48;5;${bg}m"
+        echo "$seq"
+    }
+
+    # --- DEFAULTS ---
+    local width=40
+    local prompt_char="> "
+    local placeholder="Type something..."
+    local header=""
+    local value=""
+    local char_limit=0
+    local is_password=false
+    
+    # Colores
+    local c_cursor_fg="255"
+    local c_cursor_bg="212"
+    local c_prompt_fg="240"
+    local c_text_fg=""
+    local c_placeholder_fg="240"
+    local c_header_fg="212"
+
+    local cursor_pos=0
+    local scroll_offset=0
+    local cursor_visible=1
+    
+    function show_help_panel() {
+        cat <<EOF
+Usage: bash-utils input [flags]
+
+Prompt for input on a single line.
+
+Flags:
+  -h, --help                Show help
+      --prompt="> "         Prompt string
+      --placeholder="..."   Placeholder text
+      --value=""            Initial value
+      --width=40            Visible width of the input area
+      --password            Mask input characters
+      --char-limit=0        Maximum character limit
+      --header=""           Header text
+
+Style Flags:
+  --prompt.foreground       Prompt color
+  --text.foreground         Text color
+  --cursor.foreground       Cursor text color
+  --cursor.background       Cursor background color
+EOF
+    }
+
+    # --- INPUT ---
+    local args_options=()
+    local parse_args=()
+    
+    while [[ $# -gt 0 ]]; do
+        if [[ "$1" == -* ]]; then
+            parse_args+=("$1")
+            if [[ "$1" != *=* && "$1" != --no-* && "$1" != --password ]]; then
+                 if [[ -n "$2" && "$2" != -* ]]; then parse_args+=("$2"); shift; fi
+            fi
+        else
+            args_options+=("$1")
+        fi
+        shift
+    done
+    
+    set -- "${parse_args[@]}"
+
+    # --- PARSEO ---
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) show_help_panel; return 0 ;;
+            --width=*)      width="${1#*=}"; shift ;;
+            --width)        width="$2"; shift 2 ;;
+            --prompt=*)     prompt_char="${1#*=}"; shift ;;
+            --prompt)       prompt_char="$2"; shift 2 ;;
+            --placeholder=*) placeholder="${1#*=}"; shift ;;
+            --placeholder)   placeholder="$2"; shift 2 ;;
+            --value=*)      value="${1#*=}"; shift ;;
+            --value)        value="$2"; shift 2 ;;
+            --header=*)     header="${1#*=}"; shift ;;
+            --header)       header="$2"; shift 2 ;;
+            --char-limit=*) char_limit="${1#*=}"; shift ;;
+            --char-limit)   char_limit="$2"; shift 2 ;;
+            --password)     is_password=true; shift ;;
+            
+            --prompt.foreground=*)   c_prompt_fg="${1#*=}"; shift ;;
+            --prompt.foreground)     c_prompt_fg="$2"; shift 2 ;;
+            --text.foreground=*)     c_text_fg="${1#*=}"; shift ;;
+            --text.foreground)       c_text_fg="$2"; shift 2 ;;
+            --cursor.foreground=*)   c_cursor_fg="${1#*=}"; shift ;;
+            --cursor.foreground)     c_cursor_fg="$2"; shift 2 ;;
+            --cursor.background=*)   c_cursor_bg="${1#*=}"; shift ;;
+            --cursor.background)     c_cursor_bg="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    cursor_pos=${#value}
+
+    local s_prompt="$(make_ansi "$c_prompt_fg" "")"
+    local s_text="$(make_ansi "$c_text_fg" "")"
+    local s_placeholder="$(make_ansi "$c_placeholder_fg" "")"
+    local s_header="$(make_ansi "$c_header_fg" "")"
+    local s_cursor_on="${ESC}[7m" 
+    local s_cursor_off="${ESC}[27m"
+    local reset="${ESC}[0m"
+
+    local header_lines=0
+    if [[ -n "$header" ]]; then
+        header_lines=$(echo -e "$header" | grep -c "^")
+    fi
+    local total_lines=$(( header_lines + 1 )) 
+
+    tput civis >&2
+    trap 'echo -ne "${ESC}[${total_lines}A${ESC}[J" >&2; tput cnorm >&2; return 130' SIGINT
+
+    function draw() {
+        if [[ -n "$header" ]]; then
+            echo -e "${s_header}${header}${reset}${ESC}[K" >&2
+        fi
+
+        local content="$value"
+        
+        if [[ "$is_password" == "true" ]]; then
+            local masked=""
+            for ((i=0; i<${#value}; i++)); do masked+="•"; done
+            content="$masked"
+        fi
+
+        if (( cursor_pos >= scroll_offset + width )); then
+            scroll_offset=$(( cursor_pos - width + 1 ))
+        elif (( cursor_pos < scroll_offset )); then
+            scroll_offset=$cursor_pos
+        fi
+
+        local visible_content="${content:$scroll_offset:$width}"
+        local rel_cursor=$(( cursor_pos - scroll_offset ))
+        local line_render=""
+        
+        if [[ -z "$value" ]]; then
+            local visible_ph="${placeholder:0:$width}"
+            local p_first="${visible_ph:0:1}"
+            local p_rest="${visible_ph:1}"
+
+            if [[ $cursor_visible -eq 1 ]]; then
+                line_render="${s_cursor_on}${p_first}${s_cursor_off}${s_placeholder}${p_rest}"
+            else
+                line_render="${s_placeholder}${visible_ph}"
+            fi
+        else
+            local pre="${visible_content:0:rel_cursor}"
+            local char="${visible_content:rel_cursor:1}"
+            local post="${visible_content:rel_cursor+1}"
+
+            if (( rel_cursor >= ${#visible_content} )); then
+                char=" " 
+                post=""
+            fi
+            
+            if [[ $cursor_visible -eq 1 ]]; then
+                line_render="${s_text}${pre}${s_cursor_on}${char}${s_cursor_off}${s_text}${post}"
+            else
+                line_render="${s_text}${pre}${char}${post}"
+            fi
+        fi
+
+        echo -e "${s_prompt}${prompt_char}${reset}${line_render}${reset}${ESC}[K" >&2
+    }
+
+    while true; do
+        draw
+
+        IFS= read -rsn1 -t 0.5 key < /dev/tty
+        local exit_code=$?
+
+        if [[ $exit_code -ne 0 ]]; then
+            ((cursor_visible = 1 - cursor_visible))
+            echo -ne "${ESC}[${total_lines}A" >&2
+            continue
+        fi
+
+        cursor_visible=1
+
+        if [[ $key == $ESC ]]; then
+            read -rsn5 -t 0.01 seq < /dev/tty
+            
+            case "$seq" in
+                "[C") # Right
+                    ((cursor_pos++))
+                    if ((cursor_pos > ${#value})); then cursor_pos=${#value}; fi
+                    ;;
+                "[D") # Left
+                    ((cursor_pos--))
+                    if ((cursor_pos < 0)); then cursor_pos=0; fi
+                    ;;
+                "[H"|"[1~"|"[7~"|"OH") # Home
+                    cursor_pos=0
+                    ;;
+                "[F"|"[4~"|"[8~"|"OF") # End
+                    cursor_pos=${#value}
+                    ;;
+                "[3~") # Supr / Delete
+                    if (( cursor_pos < ${#value} )); then
+                        local left="${value:0:cursor_pos}"
+                        local right="${value:cursor_pos+1}"
+                        value="${left}${right}"
+                    fi
+                    ;;
+            esac
+
+        elif [[ "$key" == "" ]]; then # Enter
+            echo -ne "${ESC}[${total_lines}A${ESC}[J" >&2
+            tput cnorm >&2
+            echo "$value"
+            return 0
+
+        elif [[ "$key" == $'\x7f' || "$key" == $'\b' ]]; then # Backspace
+            if (( cursor_pos > 0 )); then
+                local left="${value:0:cursor_pos-1}"
+                local right="${value:cursor_pos}"
+                value="${left}${right}"
+                ((cursor_pos--))
+            fi
+            
+        elif [[ "$key" == $'\x03' ]]; then # Ctrl+C
+             echo -ne "${ESC}[${total_lines}A${ESC}[J" >&2
+             tput cnorm >&2
+             return 130
+
+        elif [[ "$key" =~ [[:print:]] ]]; then
+            if [[ $char_limit -gt 0 && ${#value} -ge $char_limit ]]; then
+                :
+            else
+                local left="${value:0:cursor_pos}"
+                local right="${value:cursor_pos}"
+                value="${left}${key}${right}"
+                ((cursor_pos++))
+            fi
+        fi
+
+        echo -ne "${ESC}[${total_lines}A" >&2
+    done
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    cmd_input "${@}"
+fi

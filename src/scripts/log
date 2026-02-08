@@ -1,0 +1,284 @@
+#!/usr/bin/env bash
+
+function cmd_log() {
+    
+    function get_style_seq() {
+        local type="$1"
+        local code="$2"
+        if [[ -z "$code" ]]; then echo ""; return; fi
+        
+        local rgb_regex="^[0-9]{1,3};[0-9]{1,3};[0-9]{1,3}$"
+
+        case "$type" in
+            mode)
+                case "$code" in
+                    bold) echo -ne "\033[1m" ;;
+                    faint) echo -ne "\033[2m" ;;
+                    italic) echo -ne "\033[3m" ;;
+                    underline) echo -ne "\033[4m" ;;
+                    blink) echo -ne "\033[5m" ;;
+                esac
+                ;;
+            fg|bg)
+                local prefix="38"
+                [[ "$type" == "bg" ]] && prefix="48"
+                if [[ "$code" =~ $rgb_regex ]]; then
+                    echo -ne "\033[${prefix};2;${code}m"
+                elif [[ "$code" =~ ^[0-9]+$ ]]; then
+                    echo -ne "\033[${prefix};5;${code}m"
+                fi
+                ;;
+        esac
+    }
+
+    function die() {
+        echo -e "\033[31mError: $1\033[0m" >&2
+        return 1
+    }
+
+    function strip_ansi() {
+        sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' <<< "$1"
+    }
+
+    function show_help_panel() {
+        cat <<EOF
+Usage: gum log <text> ... [flags]
+
+Log messages to output
+
+Arguments:
+  <text> ...      Text to log
+
+Flags:
+  -h, --help              Show context-sensitive help.
+  -o, --file=STRING       Log to file
+  -f, --format            Format message using printf
+      --formatter="text"  The log formatter to use (text, json)
+  -l, --level="none"      The log level to use (debug, info, warn, error, fatal, none)
+      --prefix=STRING      Prefix to print before the message
+  -s, --structured        Use structured logging (alias for --formatter=json)
+  -t, --time=""           The time format to use (kitchen, layout, ansic, rfc822, etc...)
+      --min-level=""      Minimal level to show
+
+Style Flags
+  --level.foreground=""          Foreground Color 
+  --level.background=""          Background Color 
+  --time.foreground=""           Foreground Color
+  --time.background=""           Background Color 
+  --prefix.foreground=""         Foreground Color 
+  --prefix.background=""         Background Color 
+  --message.foreground=""        Foreground Color 
+  --message.background=""        Background Color 
+  --key.foreground=""            Foreground Color 
+  --key.background=""            Background Color 
+  --value.foreground=""          Foreground Color 
+  --value.background=""          Background Color 
+  --separator.foreground=""      Foreground Color 
+  --separator.background=""      Background Color 
+EOF
+    }
+
+    local log_level="none"
+    local min_level=""
+    local output_file=""
+    local prefix=""
+    local formatter="text"
+    local time_format=""
+    local format_msg=false
+    
+    declare -A DEFAULT_LEVEL_FG=( ["debug"]="240" ["info"]="35" ["warn"]="214" ["error"]="196" ["fatal"]="196" )
+    
+    local s_lvl_fg="" s_lvl_bg=""
+    local s_time_fg="" s_time_bg=""
+    local s_pre_fg="" s_pre_bg=""
+    local s_msg_fg="" s_msg_bg=""
+    local s_key_fg=$(get_style_seq "fg" "240") s_key_bg=""
+    local s_val_fg="" s_val_bg=""
+    local s_sep_fg=$(get_style_seq "fg" "240") s_sep_bg=""
+
+    local args_text=()
+    local args_kv=()
+    local parse_args=()
+
+    while [[ $# -gt 0 ]]; do
+        if [[ "$1" == --*=* ]]; then
+            parse_args+=("${1%%=*}" "${1#*=}")
+        elif [[ "$1" == -[a-zA-Z]=* ]]; then
+            parse_args+=("${1:0:2}" "${1:3}")
+        else
+            parse_args+=("$1")
+        fi
+        shift
+    done
+    set -- "${parse_args[@]}"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) show_help_panel; return 0 ;;
+            -f|--format) format_msg=true; shift ;;
+            -s|--structured) formatter="json"; shift ;;
+            
+            -o|--file|--formatter|-l|--level|--prefix|-t|--time|--min-level| \
+            --level.foreground|--level.background|--time.foreground|--time.background| \
+            --prefix.foreground|--prefix.background|--message.foreground|--message.background| \
+            --key.foreground|--key.background|--value.foreground|--value.background| \
+            --separator.foreground|--separator.background)
+                
+                local flag="$1"
+                if [[ $# -lt 2 ]]; then
+                    die "Flag '$flag' requires an argument." || return 1
+                fi
+                
+                local val="$2"
+                case "$flag" in
+                    -o|--file)      output_file="$val" ;;
+                    --formatter)    
+                        [[ ! "$val" =~ ^(text|json)$ ]] && die "Invalid formatter: $val (text, json)" && return 1
+                        formatter="$val" ;;
+                    -l|--level)     
+                        [[ ! "${val,,}" =~ ^(debug|info|warn|error|fatal|none)$ ]] && die "Invalid level: $val" && return 1
+                        log_level="${val,,}" ;;
+                    --prefix)       prefix="$val" ;;
+                    -t|--time)      time_format="$val" ;;
+                    --min-level)    min_level="${val,,}" ;;
+                    
+                    --level.foreground)     s_lvl_fg=$(get_style_seq "fg" "$val") ;;
+                    --level.background)     s_lvl_bg=$(get_style_seq "bg" "$val") ;;
+                    --time.foreground)      s_time_fg=$(get_style_seq "fg" "$val") ;;
+                    --time.background)      s_time_bg=$(get_style_seq "bg" "$val") ;;
+                    --prefix.foreground)    s_pre_fg=$(get_style_seq "fg" "$val") ;;
+                    --prefix.background)    s_pre_bg=$(get_style_seq "bg" "$val") ;;
+                    --message.foreground)   s_msg_fg=$(get_style_seq "fg" "$val") ;;
+                    --message.background)   s_msg_bg=$(get_style_seq "bg" "$val") ;;
+                    --key.foreground)       s_key_fg=$(get_style_seq "fg" "$val") ;;
+                    --key.background)       s_key_bg=$(get_style_seq "bg" "$val") ;;
+                    --value.foreground)     s_val_fg=$(get_style_seq "fg" "$val") ;;
+                    --value.background)     s_val_bg=$(get_style_seq "bg" "$val") ;;
+                    --separator.foreground) s_sep_fg=$(get_style_seq "fg" "$val") ;;
+                    --separator.background) s_sep_bg=$(get_style_seq "bg" "$val") ;;
+                esac
+                shift 2 ;;
+
+            -*) 
+                die "Unknown flag: $1" || return 1 ;;
+            *) 
+                if [[ "$1" == *=* ]]; then
+                    args_kv+=("$1")
+                else
+                    args_text+=("$1")
+                fi
+                shift ;;
+        esac
+    done
+
+    if [[ ${#args_text[@]} -eq 0 ]]; then
+        show_help_panel >&2
+        echo -e "\ngum: error: expected \"<text> ...\"" >&2
+        return 1
+    fi
+
+    declare -A LEVEL_VAL=( ["none"]=0 ["debug"]=1 ["info"]=2 ["warn"]=3 ["error"]=4 ["fatal"]=5 )
+    if [[ -n "$min_level" ]]; then
+        local current_val=${LEVEL_VAL[$log_level]:-0}
+        local min_val=${LEVEL_VAL[$min_level]:-0}
+        if (( current_val < min_val )); then return 0; fi
+    fi
+
+    local message="${args_text[*]}"
+    if [[ "$format_msg" == "true" ]]; then
+        local fmt="${args_text[0]}"
+        local params=("${args_text[@]:1}")
+        message=$(printf "$fmt" "${params[@]}" 2>/dev/null) || message="${args_text[*]}"
+    fi
+
+    local timestamp=""
+    if [[ -n "$time_format" ]]; then
+        local fmt=""
+        case "$time_format" in
+            kitchen)  fmt="%I:%M%p" ;;
+            layout)   fmt="%m/%d/%y %I:%M%p" ;;
+            ansic)    fmt="%a %b %e %H:%M:%S %Y" ;;
+            rfc822)   fmt="%a, %d %b %y %H:%M %Z" ;;
+            datetime) fmt="%Y-%m-%d %H:%M:%S" ;;
+            *)        fmt="$time_format" ;;
+        esac
+        timestamp=$(date +"$fmt")
+    fi
+
+    if [[ "$formatter" == "json" ]]; then
+        local ts_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        local json_parts=()
+        json_parts+=("\"time\":\"$ts_iso\"")
+        json_parts+=("\"level\":\"${log_level^^}\"")
+        [[ -n "$prefix" ]] && json_parts+=("\"prefix\":\"$prefix\"")
+        json_parts+=("\"message\":\"$message\"")
+        for kv in "${args_kv[@]}"; do
+            local k="${kv%%=*}"
+            local v="${kv#*=}"
+            v="${v//\"/\\\"}" # Escape quotes
+            json_parts+=("\"$k\":\"$v\"")
+        done
+        local final_output="{$(IFS=,; echo "${json_parts[*]}")}"
+        echo "$final_output" >&2
+        [[ -n "$output_file" ]] && echo "$final_output" >> "$output_file"
+        return 0
+    fi
+
+    local reset="\033[0m"
+    local output_line=""
+
+    # 1. Time
+    if [[ -n "$timestamp" ]]; then
+        local t_style="${s_time_fg:-$(get_style_seq "fg" "240")}${s_time_bg}"
+        output_line+="${t_style}${timestamp}${reset} "
+    fi
+
+    # 2. Level
+    if [[ "$log_level" != "none" ]]; then
+        local lvl_str="${log_level^^}"
+        printf -v lvl_str "%-6s" "$lvl_str"
+        local l_color=""
+        if [[ -n "$s_lvl_fg" ]]; then
+            l_color="$s_lvl_fg"
+        else
+            local def_col="${DEFAULT_LEVEL_FG[$log_level]}"
+            l_color=$(get_style_seq "fg" "$def_col")
+        fi
+        output_line+="${l_color}${s_lvl_bg}${lvl_str}${reset} "
+    fi
+
+    # 3. Prefix
+    if [[ -n "$prefix" ]]; then
+        local p_style="${s_pre_fg:-$(get_style_seq "fg" "212")}${s_pre_bg}"
+        output_line+="${p_style}${prefix}${reset} "
+    fi
+
+    # 4. Message
+    local m_style="${s_msg_fg}${s_msg_bg}"
+    output_line+="${m_style}${message}${reset}"
+
+    if [[ ${#args_kv[@]} -gt 0 ]]; then
+        local sep_style="${s_sep_fg}${s_sep_bg}"
+        output_line+=" ${sep_style}│${reset}"
+        local k_style="${s_key_fg}${s_key_bg}"
+        local v_style="${s_val_fg}${s_val_bg}"
+        for kv in "${args_kv[@]}"; do
+            local k="${kv%%=*}"
+            local v="${kv#*=}"
+            output_line+=" ${k_style}${k}${reset}${s_sep_fg}=${reset}${v_style}${v}${reset}"
+        done
+    fi
+
+    # Print a STDERR
+    printf "%b\n" "$output_line" >&2
+
+    if [[ -n "$output_file" ]]; then
+        local clean_output
+        clean_output=$(strip_ansi "$output_line")
+        printf "%s\n" "$clean_output" >> "$output_file"
+    fi
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    cmd_log "${@}"
+fi

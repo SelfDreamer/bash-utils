@@ -1,0 +1,277 @@
+#!/usr/bin/env bash
+
+function cmd_text() {
+    
+    local ESC=$'\e'
+    
+    function hex_to_rgb() {
+        local hex=$1
+        hex="${hex#"#"}"
+        if [[ ${#hex} -eq 3 ]]; then
+            local r=${hex:0:1}; local g=${hex:1:1}; local b=${hex:2:1}
+            hex="${r}${r}${g}${g}${b}${b}"
+        fi
+        if [[ ${#hex} -eq 6 ]]; then
+            printf "%d %d %d" "0x${hex:0:2}" "0x${hex:2:2}" "0x${hex:4:2}"
+        else
+            echo "255 255 255"
+        fi
+    }
+
+    function strip_ansi() {
+        sed -E 's/\x1b(\[[0-9;]*[A-Za-z]|\][^\x1b]*\x1b\\)//g' <<< "$1"
+    }
+
+    function check_literal() {
+        local param_name="$1"; local value="$2"; shift 2; local options=("$@")
+        local found=false
+        for opt in "${options[@]}"; do
+            if [[ "$value" == "$opt" ]]; then found=true; break; fi
+        done
+        if [[ "$found" == "false" ]]; then
+            local list_str=$(IFS=, ; echo "${options[*]}")
+            echo "gum: error: invalid value for --$param_name: \"$value\"" >&2
+            echo "Valid options: $list_str" >&2
+            return 1
+        fi
+        return 0
+    }
+
+    function parse_bool() {
+        local val="${1,,}" # to lower
+        if [[ "$val" == "true" || "$val" == "1" || "$val" == "yes" ]]; then
+            echo "true"
+        else
+            echo "false"
+        fi
+    }
+
+    function show_help_panel() {
+        cat <<EOF
+Usage: bash-utils text [flags] <text>...
+
+Print text with styles, alignment, and TrueColor gradients.
+Defaults to a purple gradient if no color is specified.
+
+Arguments:
+  <text>...            Text to print
+
+Flags:
+  -h, --help           Show help
+  --align="left"       Alignment (left, center, right)
+  
+  # Color Options
+  --foreground=""      Solid foreground color (Hex)
+  --gradient="A,B"     Foreground Gradient (Hex start, Hex end) or "none"
+  --dir="ltr"          Foreground Gradient direction (ltr, rtl)
+
+  --background=""      Solid background color (Hex)
+  --bg-gradient="A,B"  Background Gradient (Hex start, Hex end) or "none"
+  --bg-dir="ltr"       Background Gradient direction (ltr, rtl)
+                       
+  # Styles (Boolean: can be --flag or --flag=true/false)
+  --bold               Apply bold style
+  --italic             Apply italic style
+  --underline          Apply underline style
+  --strikethrough      Apply strikethrough style
+EOF
+    }
+
+    local gradient=""
+    local foreground=""
+    local direction="ltr"
+    
+    local bg_gradient=""
+    local background=""
+    local bg_direction="ltr"
+    
+    local align="left"
+    
+    local style_bold="false"
+    local style_italic="false"
+    local style_underline="false"
+    local style_strikethrough="false"
+    
+    local user_set_color=false 
+
+    local args_text=()
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --gradient=*)
+                local val="${1#*=}"
+                if [[ "$val" == "none" ]]; then
+                    gradient=""
+                    user_set_color=true 
+                else
+                    gradient="$val"
+                    user_set_color=true
+                fi
+                shift ;;
+            --gradient)
+                if [[ "$2" == "none" ]]; then
+                    gradient=""
+                    user_set_color=true
+                else
+                    gradient="$2"
+                    user_set_color=true
+                fi
+                shift 2 ;;
+            
+            --foreground=*)   foreground="${1#*=}"; user_set_color=true; shift ;;
+            --foreground)     foreground="$2";      user_set_color=true; shift 2 ;;
+            --dir=*)          direction="${1#*=}"; shift ;;
+            --dir)            direction="$2";      shift 2 ;;
+            
+            --bg-gradient=*)
+                 local val="${1#*=}"
+                 if [[ "$val" == "none" ]]; then bg_gradient=""; else bg_gradient="$val"; fi
+                 shift ;;
+            --bg-gradient)    
+                 if [[ "$2" == "none" ]]; then bg_gradient=""; else bg_gradient="$2"; fi
+                 shift 2 ;;
+            
+            --background=*)   background="${1#*=}"; shift ;;
+            --background)     background="$2";      shift 2 ;;
+            --bg-dir=*)       bg_direction="${1#*=}"; shift ;;
+            --bg-dir)         bg_direction="$2";      shift 2 ;;
+
+            --align=*)        align="${1#*=}"; shift ;;
+            --align)          align="$2";      shift 2 ;;
+            
+            --bold=*)          style_bold=$(parse_bool "${1#*=}"); shift ;;
+            --bold)            style_bold="true"; shift ;;
+            
+            --italic=*)        style_italic=$(parse_bool "${1#*=}"); shift ;;
+            --italic)          style_italic="true"; shift ;;
+            
+            --underline=*)     style_underline=$(parse_bool "${1#*=}"); shift ;;
+            --underline)       style_underline="true"; shift ;;
+            
+            --strikethrough=*) style_strikethrough=$(parse_bool "${1#*=}"); shift ;;
+            --strikethrough)   style_strikethrough="true"; shift ;;
+            
+            -h|--help)        show_help_panel; return 0 ;;
+            
+            -*) echo "Error: unknown flag: $1" >&2; return 1 ;;
+            
+            *)  args_text+=("$1"); shift ;;
+        esac
+    done
+
+    check_literal "align" "$align" "left" "center" "right" || return 1
+    check_literal "dir" "$direction" "ltr" "rtl" || return 1
+    check_literal "bg-dir" "$bg_direction" "ltr" "rtl" || return 1
+
+    local content=""
+    if [[ ${#args_text[@]} -gt 0 ]]; then
+        content="${args_text[*]}"
+    elif [ ! -t 0 ]; then
+        content=$(cat)
+    fi
+
+    if [[ -z "$content" ]]; then return 0; fi
+
+    if [[ "$user_set_color" == "false" ]]; then
+        gradient="#AA6EE6,#5A3C96"
+        direction="ltr"
+    fi
+
+    local clean_content=$(strip_ansi "$content")
+    local len=${#clean_content}
+    local term_cols=$(tput cols 2>/dev/null || echo 80)
+    local padding=0
+    
+    if [[ "$align" == "center" ]]; then
+        padding=$(( (term_cols - len) / 2 ))
+    elif [[ "$align" == "right" ]]; then
+        padding=$(( term_cols - len ))
+    fi
+    if (( padding < 0 )); then padding=0; fi
+
+    local pad_str=""
+    if (( padding > 0 )); then printf -v pad_str "%${padding}s" ""; fi
+
+    local fg_r1=255 fg_g1=255 fg_b1=255
+    local fg_r2=255 fg_g2=255 fg_b2=255
+    local has_fg=false
+
+    if [[ -n "$foreground" ]]; then
+        read fg_r1 fg_g1 fg_b1 <<< "$(hex_to_rgb "$foreground")"
+        fg_r2=$fg_r1; fg_g2=$fg_g1; fg_b2=$fg_b1
+        has_fg=true
+    elif [[ -n "$gradient" ]]; then
+        has_fg=true
+        local c1="${gradient%%,*}"; local c2="${gradient##*,}"
+        local rgb1=$(hex_to_rgb "$c1"); local rgb2=$(hex_to_rgb "$c2")
+        
+        if [[ "$direction" == "ltr" ]]; then
+            read fg_r1 fg_g1 fg_b1 <<< "$rgb1"
+            read fg_r2 fg_g2 fg_b2 <<< "$rgb2"
+        else
+            read fg_r1 fg_g1 fg_b1 <<< "$rgb2"
+            read fg_r2 fg_g2 fg_b2 <<< "$rgb1"
+        fi
+    fi
+
+    local bg_r1=0 bg_g1=0 bg_b1=0
+    local bg_r2=0 bg_g2=0 bg_b2=0
+    local has_bg=false
+
+    if [[ -n "$background" ]]; then
+        read bg_r1 bg_g1 bg_b1 <<< "$(hex_to_rgb "$background")"
+        bg_r2=$bg_r1; bg_g2=$bg_g1; bg_b2=$bg_b1
+        has_bg=true
+    elif [[ -n "$bg_gradient" ]]; then
+        has_bg=true
+        local c1="${bg_gradient%%,*}"; local c2="${bg_gradient##*,}"
+        local rgb1=$(hex_to_rgb "$c1"); local rgb2=$(hex_to_rgb "$c2")
+        
+        if [[ "$bg_direction" == "ltr" ]]; then
+            read bg_r1 bg_g1 bg_b1 <<< "$rgb1"
+            read bg_r2 bg_g2 bg_b2 <<< "$rgb2"
+        else
+            read bg_r1 bg_g1 bg_b1 <<< "$rgb2"
+            read bg_r2 bg_g2 bg_b2 <<< "$rgb1"
+        fi
+    fi
+
+    local style_seq=""
+    [[ "$style_bold" == "true" ]] && style_seq+="1;"
+    [[ "$style_italic" == "true" ]] && style_seq+="3;"
+    [[ "$style_underline" == "true" ]] && style_seq+="4;"
+    [[ "$style_strikethrough" == "true" ]] && style_seq+="9;"
+
+    
+    printf "%s" "$pad_str"
+
+    local div=$(( len - 1 ))
+    [[ $div -lt 1 ]] && div=1
+
+    for ((i=0; i<len; i++)); do
+        local ch="${clean_content:i:1}"
+        local ansi_seq="${ESC}[${style_seq}"
+
+        if [[ "$has_fg" == "true" ]]; then
+            local fr=$(( fg_r1 + (fg_r2 - fg_r1) * i / div ))
+            local fg=$(( fg_g1 + (fg_g2 - fg_g1) * i / div ))
+            local fb=$(( fg_b1 + (fg_b2 - fg_b1) * i / div ))
+            ansi_seq+="38;2;${fr};${fg};${fb};"
+        fi
+
+        if [[ "$has_bg" == "true" ]]; then
+            local br=$(( bg_r1 + (bg_r2 - bg_r1) * i / div ))
+            local bg=$(( bg_g1 + (bg_g2 - bg_g1) * i / div ))
+            local bb=$(( bg_b1 + (bg_b2 - bg_b1) * i / div ))
+            ansi_seq+="48;2;${br};${bg};${bb};"
+        fi
+
+        ansi_seq="${ansi_seq%;}m" 
+        printf "${ansi_seq}%s" "$ch"
+    done
+    echo -e "${ESC}[0m"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    cmd_text "${@}"
+fi

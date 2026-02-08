@@ -1,0 +1,350 @@
+#!/usr/bin/env bash
+
+function cmd_write() {
+    
+    local ESC=$'\e'
+    local CR=$'\r'
+
+    function make_ansi() {
+        local fg=$1; local bg=$2; local seq=""
+        [[ -n "$fg" ]] && seq+="${ESC}[38;5;${fg}m"
+        [[ -n "$bg" ]] && seq+="${ESC}[48;5;${bg}m"
+        echo "$seq"
+    }
+
+    local width=50
+    local height=5
+    local header=""
+    local placeholder="Write something..."
+    local prompt_char="┃ "
+    
+    local c_cursor_fg="255"
+    local c_cursor_bg="212"
+    local c_placeholder_fg="240"
+    local c_header_fg="212"
+    local c_prompt_fg="240"
+    
+    local BUFFER=("") 
+    local cursor_y=0  
+    local cursor_x=0  
+    local scroll_offset=0
+    local cursor_visible=1
+    local show_help=true
+
+    function show_help_panel() {
+        cat <<EOF
+Usage: bash-utils write [flags]
+
+Multi-line text editor.
+Controls:
+  Type to insert text.
+  Enter to insert newline.
+  Backspace/Delete to delete.
+  Arrows/Home/End to navigate.
+  Ctrl+D to Save & Exit.
+  Ctrl+C to Cancel.
+
+Flags:
+  -h, --help                Show help
+      --width=50            Width of the area (approx)
+      --height=5            Visible height
+      --header=""           Header text
+      --placeholder=""      Placeholder text
+      --value=""            Initial value
+
+Style Flags:
+  --cursor.foreground       Cursor block text color
+  --cursor.background       Cursor block background color
+EOF
+    }
+
+    local args_options=()
+    local parse_args=()
+    
+    while [[ $# -gt 0 ]]; do
+        if [[ "$1" == -* ]]; then
+            parse_args+=("$1")
+            if [[ "$1" != *=* && "$1" != --no-* ]]; then
+                 if [[ -n "$2" && "$2" != -* ]]; then parse_args+=("$2"); shift; fi
+            fi
+        else
+            args_options+=("$1")
+        fi
+        shift
+    done
+    
+    set -- "${parse_args[@]}"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) show_help_panel; return 0 ;;
+            --width=*)    width="${1#*=}"; shift ;;
+            --width)      width="$2"; shift 2 ;;
+            --height=*)   height="${1#*=}"; shift ;;
+            --height)     height="$2"; shift 2 ;;
+            --header=*)   header="${1#*=}"; shift ;;
+            --header)     header="$2"; shift 2 ;;
+            --placeholder=*) placeholder="${1#*=}"; shift ;;
+            --placeholder)   placeholder="$2"; shift 2 ;;
+            --value=*)    
+                local val="${1#*=}"
+                mapfile -t BUFFER <<< "$val"
+                shift ;;
+            --value)
+                local val="$2"
+                mapfile -t BUFFER <<< "$val"
+                shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    if [[ ${#BUFFER[@]} -eq 1 && -z "${BUFFER[0]}" && ! -t 0 ]]; then
+        BUFFER=()
+        while IFS= read -r line; do BUFFER+=("$line"); done
+        exec 0< /dev/tty
+    fi
+
+    if [[ ${#BUFFER[@]} -eq 0 ]]; then BUFFER=(""); fi
+    
+    cursor_y=$((${#BUFFER[@]} - 1))
+    cursor_x=${#BUFFER[$cursor_y]}
+
+    local s_header="$(make_ansi "$c_header_fg" "")"
+    local s_placeholder="$(make_ansi "$c_placeholder_fg" "")"
+    local s_prompt="$(make_ansi "$c_prompt_fg" "")"
+    local s_cursor_on="${ESC}[7m" 
+    local s_cursor_off="${ESC}[27m"
+    local reset="${ESC}[0m"
+
+    local header_lines=0
+    if [[ -n "$header" ]]; then
+        header_lines=$(echo -e "$header" | grep -c "^")
+    fi
+    local footer_lines=1 
+    local total_lines=$(( header_lines + height + footer_lines ))
+
+    tput civis >&2
+    trap 'echo -ne "${ESC}[${total_lines}A${ESC}[J" >&2; tput cnorm >&2; return 130' SIGINT
+
+    function draw() {
+        if [[ -n "$header" ]]; then
+            echo -e "${s_header}${header}${reset}${ESC}[K" >&2
+        fi
+
+        if (( cursor_y < scroll_offset )); then
+            scroll_offset=$cursor_y
+        elif (( cursor_y >= scroll_offset + height )); then
+            scroll_offset=$(( cursor_y - height + 1 ))
+        fi
+
+        for (( i=0; i<height; i++ )); do
+            local y=$(( scroll_offset + i ))
+            local line_content=""
+            local prompt="${s_prompt}${prompt_char}${reset}"
+
+            if (( y >= ${#BUFFER[@]} )); then
+                echo -e "${s_prompt}~ ${reset}${ESC}[K" >&2
+                continue
+            fi
+
+            local raw_line="${BUFFER[$y]}"
+            
+            if (( y == cursor_y )); then
+                if [[ ${#BUFFER[@]} -eq 1 && -z "${BUFFER[0]}" && $cursor_x -eq 0 ]]; then
+                     local char_at_cursor=" "
+                     if [[ -n "$placeholder" ]]; then
+                        local p_first="${placeholder:0:1}"
+                        local p_rest="${placeholder:1}"
+                        
+                        if [[ $cursor_visible -eq 1 ]]; then
+                            line_content="${s_cursor_on}${p_first}${s_cursor_off}${s_placeholder}${p_rest}${reset}"
+                        else
+                             line_content="${s_placeholder}${placeholder}${reset}"
+                        fi
+                     else
+                        if [[ $cursor_visible -eq 1 ]]; then line_content="${s_cursor_on} ${s_cursor_off}"; else line_content=" "; fi
+                     fi
+                else
+                    local len=${#raw_line}
+                    
+                    if (( cursor_x >= len )); then
+                        local pre="${raw_line}"
+                        local cursor_char=" " 
+                        if [[ $cursor_visible -eq 1 ]]; then
+                            line_content="${pre}${s_cursor_on}${cursor_char}${s_cursor_off}"
+                        else
+                            line_content="${pre}${cursor_char}"
+                        fi
+                    else
+                        local pre="${raw_line:0:cursor_x}"
+                        local char="${raw_line:cursor_x:1}"
+                        local post="${raw_line:cursor_x+1}"
+                        
+                        if [[ $cursor_visible -eq 1 ]]; then
+                            line_content="${pre}${s_cursor_on}${char}${s_cursor_off}${post}"
+                        else
+                            line_content="${pre}${char}${post}"
+                        fi
+                    fi
+                fi
+            else
+                if [[ ${#BUFFER[@]} -eq 1 && -z "${BUFFER[0]}" ]]; then
+                    line_content="${s_placeholder}${placeholder}${reset}"
+                else
+                    line_content="${raw_line}"
+                fi
+            fi
+
+            echo -e "${prompt}${line_content}${reset}${ESC}[K" >&2
+        done
+
+        echo -e "${ESC}[2mCtrl+D to Save • Ctrl+C to Cancel${reset}${ESC}[K" >&2
+    }
+
+    while true; do
+        draw
+
+        IFS= read -rsn1 -t 0.5 key < /dev/tty
+        local exit_code=$?
+
+        if [[ $exit_code -ne 0 ]]; then
+            ((cursor_visible = 1 - cursor_visible))
+            echo -ne "${ESC}[${total_lines}A" >&2
+            continue
+        fi
+
+        cursor_visible=1
+
+        
+        if [[ $key == $ESC ]]; then
+            read -rsn5 -t 0.01 seq < /dev/tty
+            
+            case "$seq" in
+                "[A") # Up
+                    ((cursor_y--))
+                    if ((cursor_y < 0)); then cursor_y=0; fi
+                    local len=${#BUFFER[$cursor_y]}
+                    if ((cursor_x > len)); then cursor_x=$len; fi
+                    ;;
+                "[B") # Down
+                    ((cursor_y++))
+                    local max_y=$((${#BUFFER[@]} - 1))
+                    if ((cursor_y > max_y)); then cursor_y=$max_y; fi
+                    local len=${#BUFFER[$cursor_y]}
+                    if ((cursor_x > len)); then cursor_x=$len; fi
+                    ;;
+                "[C") # Right
+                    local len=${#BUFFER[$cursor_y]}
+                    ((cursor_x++))
+                    if ((cursor_x > len)); then 
+                         if ((cursor_y < ${#BUFFER[@]} - 1)); then
+                             ((cursor_y++))
+                             cursor_x=0
+                         else
+                             cursor_x=$len 
+                         fi
+                    fi
+                    ;;
+                "[D") # Left
+                    ((cursor_x--))
+                    if ((cursor_x < 0)); then 
+                        if ((cursor_y > 0)); then
+                            ((cursor_y--))
+                            cursor_x=${#BUFFER[$cursor_y]}
+                        else
+                            cursor_x=0 
+                        fi
+                    fi
+                    ;;
+                "[3~") # Supr / Delete
+                    local current_line="${BUFFER[$cursor_y]}"
+                    local len=${#current_line}
+                    
+                    if (( cursor_x < len )); then
+                        local left="${current_line:0:cursor_x}"
+                        local right="${current_line:cursor_x+1}"
+                        BUFFER[$cursor_y]="${left}${right}"
+                    elif (( cursor_y < ${#BUFFER[@]} - 1 )); then
+                        local next_y=$((cursor_y + 1))
+                        local next_line="${BUFFER[$next_y]}"
+                        BUFFER[$cursor_y]="${current_line}${next_line}"
+                        
+                        BUFFER=("${BUFFER[@]:0:next_y}" "${BUFFER[@]:next_y+1}")
+                    fi
+                    ;;
+                "[H"|"[1~"|"[7~") 
+                    cursor_x=0
+                    ;;
+                "[F"|"[4~"|"[8~") 
+                    local len=${#BUFFER[$cursor_y]}
+                    cursor_x=$len
+                    ;;
+                "[5~") 
+                    ((cursor_y -= 5))
+                    if ((cursor_y < 0)); then cursor_y=0; fi
+                    local len=${#BUFFER[$cursor_y]}
+                    if ((cursor_x > len)); then cursor_x=$len; fi
+                    ;;
+                "[6~") 
+                    ((cursor_y += 5))
+                    local max_y=$((${#BUFFER[@]} - 1))
+                    if ((cursor_y > max_y)); then cursor_y=$max_y; fi
+                    local len=${#BUFFER[$cursor_y]}
+                    if ((cursor_x > len)); then cursor_x=$len; fi
+                    ;;
+            esac
+
+        elif [[ "$key" == $'\x04' ]]; then 
+            echo -ne "${ESC}[${total_lines}A${ESC}[J" >&2
+            tput cnorm >&2
+            for line in "${BUFFER[@]}"; do echo "$line"; done
+            return 0
+
+        elif [[ "$key" == $'\x03' ]]; then 
+            echo -ne "${ESC}[${total_lines}A${ESC}[J" >&2
+            tput cnorm >&2
+            return 130
+
+        elif [[ "$key" == "" ]]; then 
+            local current_line="${BUFFER[$cursor_y]}"
+            local left="${current_line:0:cursor_x}"
+            local right="${current_line:cursor_x}"
+            BUFFER[$cursor_y]="$left"
+            local next_y=$((cursor_y + 1))
+            BUFFER=("${BUFFER[@]:0:next_y}" "$right" "${BUFFER[@]:next_y}")
+            ((cursor_y++))
+            cursor_x=0
+
+        elif [[ "$key" == $'\x7f' || "$key" == $'\b' ]]; then 
+            local current_line="${BUFFER[$cursor_y]}"
+            
+            if (( cursor_x > 0 )); then
+                local left="${current_line:0:cursor_x-1}"
+                local right="${current_line:cursor_x}"
+                BUFFER[$cursor_y]="${left}${right}"
+                ((cursor_x--))
+            elif (( cursor_y > 0 )); then
+                local prev_y=$((cursor_y - 1))
+                local prev_line="${BUFFER[$prev_y]}"
+                local new_x=${#prev_line} 
+                BUFFER[$prev_y]="${prev_line}${current_line}"
+                BUFFER=("${BUFFER[@]:0:cursor_y}" "${BUFFER[@]:cursor_y+1}")
+                cursor_y=$prev_y
+                cursor_x=$new_x
+            fi
+
+        elif [[ "$key" =~ [[:print:]] ]]; then
+            local current_line="${BUFFER[$cursor_y]}"
+            local left="${current_line:0:cursor_x}"
+            local right="${current_line:cursor_x}"
+            BUFFER[$cursor_y]="${left}${key}${right}"
+            ((cursor_x++))
+        fi
+
+        echo -ne "${ESC}[${total_lines}A" >&2
+    done
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    cmd_write "${@}"
+fi

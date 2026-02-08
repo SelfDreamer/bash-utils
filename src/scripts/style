@@ -1,0 +1,342 @@
+#!/usr/bin/env bash
+
+ansi_aware_wrap() {
+    local text="$1"
+    local width="$2"
+
+    echo -e "$text" | awk -v width="$width" '
+    function visible_length(str,    stripped) {
+        stripped = str
+        gsub(/\033\[[0-9;]*[a-zA-Z]/, "", stripped)
+        gsub(/\033][^\033]*\033\\/, "", stripped)
+        return length(stripped)
+    }
+
+    {
+        line = $0
+        gsub(/\t/, "    ", line)
+        if (length(line) == 0) { print ""; next }
+
+        current_line = ""; current_len = 0
+        
+        n = split(line, words, " ")
+        if (n == 0) { print line; next }
+
+        remaining = line
+        while (length(remaining) > 0) {
+            match(remaining, /[^[:space:]]+/)
+            if (RSTART == 0) { 
+                current_line = current_line remaining
+                break 
+            }
+            
+            gap = substr(remaining, 1, RSTART - 1)
+            word = substr(remaining, RSTART, RLENGTH)
+            chunk = gap word
+            chunk_len = visible_length(chunk)
+            
+            if (current_len + chunk_len <= width) {
+                current_line = current_line chunk
+                current_len += chunk_len
+            } else {
+                if (current_len > 0) {
+                    print current_line
+                    current_line = word
+                    current_len = visible_length(word)
+                } else {
+                    print chunk
+                    current_line = ""
+                    current_len = 0
+                }
+            }
+            remaining = substr(remaining, RSTART + RLENGTH)
+        }
+        if (length(current_line) > 0) print current_line
+    }'
+}
+
+function cmd_style() {
+    local ESC=$'\e'
+    
+    strip_ansi() { sed -E 's/\x1b(\[[0-9;]*[A-Za-z]|\][^\x1b]*\x1b\\)//g' <<< "$1"; }
+    get_str_width() { local clean; clean=$(strip_ansi "$1"); echo ${#clean}; }
+    
+    make_ansi() {
+        local fg=$1; local bg=$2; local attr=$3; local seq=""
+        [[ -n "$attr" ]] && seq+="${ESC}[${attr}m"
+        [[ -n "$fg" ]] && seq+="${ESC}[38;5;${fg}m"
+        [[ -n "$bg" ]] && seq+="${ESC}[48;5;${bg}m"
+        echo "$seq"
+    }
+    
+    repeat_str() {
+        local str=$1; local count=$2
+        if (( count > 0 )); then printf "%0.s${str}" $(seq 1 "$count"); fi
+    }
+
+    parse_spacing() {
+        local input=($1)
+        case ${#input[@]} in
+            1) echo "${input[0]} ${input[0]} ${input[0]} ${input[0]}" ;;
+            2) echo "${input[0]} ${input[1]} ${input[0]} ${input[1]}" ;;
+            4) echo "${input[0]} ${input[1]} ${input[2]} ${input[3]}" ;;
+            *) echo "0 0 0 0" ;;
+        esac
+    }
+
+    function show_help_panel() {
+        cat <<EOF
+Usage: bash-utils style [flags] <text>...
+
+Apply styling to text.
+
+Arguments:
+  <text>...            Text to style
+
+Flags:
+  -h, --help           Show help
+
+  --foreground=""      Foreground Color (0-255)
+  --background=""      Background Color (0-255)
+  --border="none"      Border style (none, normal, rounded, thick, double, hidden)
+  --border-foreground  Border Foreground Color
+  --border-background  Border Background Color
+  
+  --align="left"       Text alignment (left, center, right)
+  --width=0            Fixed width (0 = auto)
+  --height=0           Fixed height (0 = auto)
+  
+  --padding="0"        Padding (CSS syntax: "1" or "1 2" or "1 2 3 4")
+  --margin="0"         Margin (CSS syntax)
+
+  --bold               Apply bold
+  --faint              Apply faint
+  --italic             Apply italic
+  --underline          Apply underline
+  --strikethrough      Apply strikethrough
+EOF
+    }
+
+    declare -A B_NONE=( [tl]="" [t]="" [tr]="" [l]="" [r]="" [bl]="" [b]="" [br]="" )
+    declare -A B_NORM=( [tl]="┌" [t]="─" [tr]="┐" [l]="│" [r]="│" [bl]="└" [b]="─" [br]="┘" )
+    declare -A B_RND=(  [tl]="╭" [t]="─" [tr]="╮" [l]="│" [r]="│" [bl]="╰" [b]="─" [br]="╯" )
+    declare -A B_THICK=([tl]="┏" [t]="━" [tr]="┓" [l]="┃" [r]="┃" [bl]="┗" [b]="━" [br]="┛" )
+    declare -A B_DBL=(  [tl]="╔" [t]="═" [tr]="╗" [l]="║" [r]="║" [bl]="╚" [b]="═" [br]="╝" )
+    declare -A B_HID=(  [tl]=" " [t]=" " [tr]=" " [l]=" " [r]=" " [bl]=" " [b]=" " [br]=" " )
+
+    local foreground="" background="" border_fg="" border_bg=""
+    local border_type="none" align="left"
+    local width=0 height=0 padding="0" margin="0"
+    local attr_bold="" attr_italic="" attr_underline="" attr_faint="" attr_strikethrough=""
+
+    local args_text=()
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --) shift; args_text+=("$@"); break ;;
+
+            --foreground=*) foreground="${1#*=}"; shift ;;
+            --foreground)   foreground="$2"; shift 2 ;;
+            
+            --background=*) background="${1#*=}"; shift ;;
+            --background)   background="$2"; shift 2 ;;
+            
+            --border=*)     border_type="${1#*=}"; shift ;;
+            --border)       border_type="$2"; shift 2 ;;
+            
+            --border-foreground=*) border_fg="${1#*=}"; shift ;;
+            --border-foreground)   border_fg="$2"; shift 2 ;;
+            
+            --border-background=*) border_bg="${1#*=}"; shift ;;
+            --border-background)   border_bg="$2"; shift 2 ;;
+            
+            --align=*)      align="${1#*=}"; shift ;;
+            --align)        align="$2"; shift 2 ;;
+            
+            --width=*)      width="${1#*=}"; shift ;;
+            --width)        width="$2"; shift 2 ;;
+            
+            --height=*)     height="${1#*=}"; shift ;;
+            --height)       height="$2"; shift 2 ;;
+            
+            --padding=*)    padding="${1#*=}"; shift ;;
+            --padding)      padding="$2"; shift 2 ;;
+            
+            --margin=*)     margin="${1#*=}"; shift ;;
+            --margin)       margin="$2"; shift 2 ;;
+            
+            --bold)         attr_bold="1;"; shift ;;
+            --faint)        attr_faint="2;"; shift ;;
+            --italic)       attr_italic="3;"; shift ;;
+            --underline)    attr_underline="4;"; shift ;;
+            --strikethrough) attr_strikethrough="9;"; shift ;;
+            
+            -h|--help)      show_help_panel; return 0 ;;
+            
+            -*) 
+                echo "Error: unknown flag: $1" >&2
+                return 1 
+                ;;
+            
+            *)              
+                args_text+=("$1"); shift 
+                ;;
+        esac
+    done
+
+    local raw_content=""
+    if [[ ${#args_text[@]} -gt 0 ]]; then
+        local has_newlines=false
+        for arg in "${args_text[@]}"; do
+            if [[ "$arg" == *$'\n'* ]]; then has_newlines=true; break; fi
+        done
+        
+        if [[ "$has_newlines" == "true" ]]; then
+             raw_content="${args_text[*]}"
+        else
+             raw_content="${args_text[*]}"
+        fi
+    elif [ ! -t 0 ]; then
+        raw_content=$(cat)
+    fi
+
+    if [[ -z "$raw_content" ]]; then return 0; fi
+
+    local term_cols=$(tput cols)
+    local wrap_at=$term_cols
+    
+    read pt pr pb pl <<< "$(parse_spacing "$padding")"
+    
+    if (( width > 0 )); then
+        local border_w=0
+        [[ "$border_type" != "none" ]] && border_w=2
+        wrap_at=$(( width - border_w - pl - pr ))
+        if (( wrap_at < 1 )); then wrap_at=1; fi
+    fi
+
+    local content
+    content=$(ansi_aware_wrap "$raw_content" "$wrap_at")
+
+    IFS=$'\n' read -rd '' -a lines <<< "$content"
+    
+    local max_content_w=0
+    for line in "${lines[@]}"; do
+        local len=$(get_str_width "$line")
+        (( len > max_content_w )) && max_content_w=$len
+    done
+
+    local target_w=$max_content_w
+    if (( width > 0 )); then
+        local border_w=0
+        [[ "$border_type" != "none" ]] && border_w=2
+        local avail_w=$(( width - border_w - pl - pr ))
+        if (( avail_w > max_content_w )); then target_w=$avail_w; fi
+    fi
+
+    local combined_attr="${attr_bold}${attr_faint}${attr_italic}${attr_underline}${attr_strikethrough}"
+    combined_attr="${combined_attr%;}" 
+    
+    local s_text="$(make_ansi "$foreground" "$background" "$combined_attr")"
+    local s_border="$(make_ansi "$border_fg" "$border_bg")"
+    local reset="${ESC}[0m"
+
+    local -n B
+    case "$border_type" in
+        rounded) B=B_RND ;;
+        thick)   B=B_THICK ;;
+        double)  B=B_DBL ;;
+        hidden)  B=B_HID ;;
+        normal)  B=B_NORM ;;
+        *)       B=B_NONE ;;
+    esac
+
+    read mt mr mb ml <<< "$(parse_spacing "$margin")"
+    local inner_full_width=$(( pl + target_w + pr ))
+    local mar_l_str=$(repeat_str " " $ml)
+    local pad_l_str=$(repeat_str " " $pl)
+    local pad_r_str=$(repeat_str " " $pr)
+
+    
+    repeat_str $'\n' $mt
+
+    if [[ "$border_type" != "none" ]]; then
+        echo -ne "${mar_l_str}${s_border}${B[tl]}"
+        repeat_str "${B[t]}" $inner_full_width
+        echo -e "${B[tr]}${reset}"
+    fi
+
+    for ((i=0; i<pt; i++)); do
+        echo -ne "${mar_l_str}"
+        [[ "$border_type" != "none" ]] && echo -ne "${s_border}${B[l]}${reset}"
+        echo -ne "${s_text}"
+        repeat_str " " $inner_full_width
+        echo -ne "${reset}"
+        [[ "$border_type" != "none" ]] && echo -ne "${s_border}${B[r]}${reset}"
+        echo ""
+    done
+
+    local content_lines=${#lines[@]}
+    local render_lines=$content_lines
+    
+    if (( height > 0 )); then
+        local border_h=0
+        [[ "$border_type" != "none" ]] && border_h=2
+        local avail_h=$(( height - border_h - pt - pb ))
+        if (( avail_h > content_lines )); then render_lines=$avail_h; fi
+    fi
+
+    for ((i=0; i<render_lines; i++)); do
+        local line=""
+        if (( i < content_lines )); then line="${lines[$i]}"; fi
+        
+        local current_len=$(get_str_width "$line")
+        local extra_space=$(( target_w - current_len ))
+        if (( extra_space < 0 )); then extra_space=0; fi
+
+        local fill_l=0
+        local fill_r=0
+        
+        if [[ "$align" == "center" ]]; then
+            fill_l=$(( extra_space / 2 ))
+            fill_r=$(( extra_space - fill_l ))
+        elif [[ "$align" == "right" ]]; then
+            fill_l=$extra_space
+        else 
+            fill_r=$extra_space
+        fi
+
+        echo -ne "${mar_l_str}"
+        [[ "$border_type" != "none" ]] && echo -ne "${s_border}${B[l]}${reset}"
+        
+        echo -ne "${s_text}${pad_l_str}"
+        repeat_str " " $fill_l
+        echo -ne "${line}"
+        repeat_str " " $fill_r
+        echo -ne "${pad_r_str}${reset}"
+
+        [[ "$border_type" != "none" ]] && echo -ne "${s_border}${B[r]}${reset}"
+        echo ""
+    done
+
+    for ((i=0; i<pb; i++)); do
+        echo -ne "${mar_l_str}"
+        [[ "$border_type" != "none" ]] && echo -ne "${s_border}${B[l]}${reset}"
+        echo -ne "${s_text}"
+        repeat_str " " $inner_full_width
+        echo -ne "${reset}"
+        [[ "$border_type" != "none" ]] && echo -ne "${s_border}${B[r]}${reset}"
+        echo ""
+    done
+
+    if [[ "$border_type" != "none" ]]; then
+        echo -ne "${mar_l_str}${s_border}${B[bl]}"
+        repeat_str "${B[b]}" $inner_full_width
+        echo -e "${B[br]}${reset}"
+    fi
+
+    repeat_str $'\n' $mb
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    cmd_style "${@}"
+fi

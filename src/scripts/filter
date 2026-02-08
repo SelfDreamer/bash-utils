@@ -1,0 +1,403 @@
+#!/usr/bin/env bash
+
+function cmd_filter() {
+    local ESC=$'\e'
+    local CSI="${ESC}["
+    local RST="${CSI}0m"
+    
+    local TP_CIVIS=$(tput civis)
+    local TP_CNORM=$(tput cnorm)
+    local TP_EL=$(tput el)
+    local TP_ED=$(tput ed)
+    
+    local height=0 
+    local width=0
+    local prompt_char="> "
+    local placeholder="Filter..."
+    local header=""
+    local reverse_mode=false
+    local fuzzy_mode=true
+    local limit=1
+    local strict_output=false
+    local select_if_one=false
+    local auto_advance=true 
+    
+    local c_indicator="212" 
+    local c_match="212"
+    local c_header="99"
+    local c_text="" 
+    local c_prompt="240"
+    local c_placeholder="240"
+    local c_cursor_fg="" 
+    local c_cursor_bg=""
+    local c_selected_fg="212"
+    local c_unselected_fg="240"
+    
+    local indicator="•"
+    local selected_prefix=" ◉ "
+    local unselected_prefix=" ○ "
+    
+    local query=""
+    local cursor_pos=0
+    local input_scroll_offset=0
+    local selected_idx=0
+    local scroll_offset=0
+    local cursor_visible=1
+    declare -A SELECTED_ITEMS
+    local filtered_options=()
+    
+    local TEMP_DATA
+    TEMP_DATA=$(mktemp) || return 1
+
+    function die() {
+        echo -e "${CSI}31mError: $1${RST}" >&2
+        rm -f "$TEMP_DATA"
+        return 1
+    }
+
+    function show_help() {
+        function p_flag() { printf "      %-43s %s\n" "$1" "$2"; }
+        function p_sec() { printf "\n%s\n" "$1"; }
+
+        cat <<EOF >&2
+Usage: gum filter [<options> ...] [flags]
+
+Filter items from a list
+
+Arguments:
+  [<options> ...]        Options to filter.
+
+Flags:
+  -h, --help             Show context-sensitive help.
+  -v, --version          Print the version number
+
+EOF
+        p_flag "--indicator=\"•\"" "Character for selection (\$GUM_FILTER_INDICATOR)"
+        p_flag "--selected=,..." "Options that should start as selected"
+        p_flag "--[no-]show-help" "Show help keybinds"
+        p_flag "--selected-prefix=\" ◉ \"" "Character to indicate selected items"
+        p_flag "--unselected-prefix=\" ○ \"" "Character to indicate unselected items"
+        p_flag "--header=\"\"" "Header value"
+        p_flag "--placeholder=\"Filter...\"" "Placeholder value"
+        p_flag "--prompt=\"> \"" "Prompt to display"
+        p_flag "--width=0" "Input width"
+        p_flag "--height=0" "Input height"
+        p_flag "--value=\"\"" "Initial filter value"
+        p_flag "--reverse" "Display from the bottom of the screen"
+        p_flag "--[no-]fuzzy" "Enable fuzzy matching"
+        p_flag "--timeout=0s" "Timeout until filter command aborts"
+        p_flag "--[no-]strip-ansi" "Strip ANSI sequences"
+
+        p_sec "Style Flags"
+        p_flag "--indicator.foreground=\"212\"" "Foreground Color"
+        p_flag "--selected-indicator.foreground=\"212\"" "Foreground Color"
+        p_flag "--unselected-prefix.foreground=\"240\"" "Foreground Color"
+        p_flag "--header.foreground=\"99\"" "Foreground Color"
+        p_flag "--text.foreground=\"\"" "Foreground Color"
+        p_flag "--match.foreground=\"212\"" "Foreground Color"
+        p_flag "--prompt.foreground=\"240\"" "Foreground Color"
+        p_flag "--placeholder.foreground=\"240\"" "Foreground Color"
+
+        p_sec "Selection"
+        p_flag "--limit=1" "Maximum number of options to pick"
+        p_flag "--no-limit" "Pick unlimited number of options"
+        p_flag "--select-if-one" "Select the given option if there is only one"
+        p_flag "--[no-]strict" "Only returns if anything matched"
+        p_flag "--no-auto-advance" "Don't move cursor down after selection"
+        echo "" >&2
+    }
+
+    local args_options=()
+    local parse_args=()
+    
+    while [[ $# -gt 0 ]]; do
+        if [[ "$1" == --*=* ]]; then
+            local key="${1%%=*}"
+            local val="${1#*=}"
+            parse_args+=("$key" "$val")
+        else
+            parse_args+=("$1")
+        fi
+        shift
+    done
+    set -- "${parse_args[@]}"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) show_help; rm -f "$TEMP_DATA"; return 0 ;;
+            --reverse) reverse_mode=true ;;
+            --fuzzy)   fuzzy_mode=true ;;
+            --no-fuzzy) fuzzy_mode=false ;;
+            --no-limit) limit=0 ;;
+            --strict)   strict_output=true ;;
+            --no-strict) strict_output=false ;;
+            --select-if-one) select_if_one=true ;;
+            --no-auto-advance) auto_advance=false ;; 
+            --no-show-help|--show-help|--no-fuzzy-sort|--no-strip-ansi) : ;;
+
+            --height|--width|--prompt|--placeholder|--header|--value|--limit|--indicator|--selected-prefix|--unselected-prefix| \
+            --timeout|--input-delimiter|--output-delimiter|--padding|--selected| \
+            --indicator.foreground|--indicator.background| \
+            --selected-indicator.foreground|--selected-indicator.background| \
+            --unselected-prefix.foreground|--unselected-prefix.background| \
+            --header.foreground|--header.background| \
+            --text.foreground|--text.background| \
+            --cursor-text.foreground|--cursor-text.background| \
+            --match.foreground|--match.background| \
+            --prompt.foreground|--prompt.background| \
+            --placeholder.foreground|--placeholder.background)
+                if [[ $# -lt 2 ]]; then die "Flag '$1' requires an argument."; return 1; fi
+                local val="$2"
+                case "$1" in
+                    --height) height="$val" ;;
+                    --width) width="$val" ;;
+                    --prompt) prompt_char="$val" ;;
+                    --placeholder) placeholder="$val" ;;
+                    --header) header="$val" ;;
+                    --value) query="$val" ;;
+                    --limit) limit="$val" ;;
+                    --indicator) indicator="$val" ;;
+                    --selected-prefix) selected_prefix="$val" ;;
+                    --unselected-prefix) unselected_prefix="$val" ;;
+                    
+                    --indicator.foreground) c_indicator="$val" ;;
+                    --match.foreground) c_match="$val" ;;
+                    --header.foreground) c_header="$val" ;;
+                    --text.foreground) c_text="$val" ;;
+                    --prompt.foreground) c_prompt="$val" ;;
+                    --placeholder.foreground) c_placeholder="$val" ;;
+                    --cursor-text.foreground) c_cursor_fg="$val" ;;
+                    --cursor-text.background) c_cursor_bg="$val" ;;
+                    --selected-indicator.foreground) c_selected_fg="$val" ;;
+                    --unselected-prefix.foreground) c_unselected_fg="$val" ;;
+                esac
+                shift ;; 
+            
+            -*) die "Unknown flag: $1"; return 1 ;;
+            *) args_options+=("$1") ;;
+        esac
+        shift 
+    done
+
+    [[ $height -eq 0 ]] && height=10
+    
+    if [[ ${#args_options[@]} -gt 0 ]]; then
+        printf "%s\n" "${args_options[@]}" > "$TEMP_DATA"
+    elif [ ! -t 0 ]; then
+        cat > "$TEMP_DATA"
+        exec 0< /dev/tty
+    else
+        find . -maxdepth 1 -mindepth 1 -printf '%P\n' | sort > "$TEMP_DATA"
+    fi
+    [[ -s "$TEMP_DATA" ]] || { rm -f "$TEMP_DATA"; return 1; }
+
+    if [[ "$select_if_one" == "true" ]]; then
+        if [[ $(wc -l < "$TEMP_DATA") -eq 1 ]]; then
+            cat "$TEMP_DATA"
+            rm -f "$TEMP_DATA"
+            return 0
+        fi
+    fi
+
+    function col() { [[ -n "$1" ]] && echo -ne "${CSI}38;5;${1}m"; }
+    local C_IND="$(col $c_indicator)"
+    local C_MATCH="$(col $c_match)"
+    local C_HEAD="$(col $c_header)"
+    local C_PROMPT="$(col $c_prompt)"
+    local C_PLACE="$(col $c_placeholder)"
+    local C_TEXT="$(col $c_text)"
+    local C_SEL_FG="$(col $c_selected_fg)"
+    local C_UNSEL_FG="$(col $c_unselected_fg)"
+    local C_RST="${RST}"
+
+    local header_lines=0
+    [[ -n "$header" ]] && header_lines=1
+    local total_height=$(( header_lines + height + 1 ))
+
+    echo -ne "$TP_CIVIS" >&2
+    for ((i=1; i<total_height; i++)); do echo >&2; done
+    echo -ne "" >&2
+    tput cuu $((total_height - 1)) >&2
+
+    trap 'tput cuu $((total_height - 1)) >&2; printf "\r" >&2; tput ed >&2; tput cnorm >&2; rm -f "$TEMP_DATA"; return 130' SIGINT
+
+    function perform_filter() {
+        filtered_options=()
+        if [[ -z "$query" ]]; then
+            mapfile -t filtered_options < <(head -n 300 "$TEMP_DATA")
+        else
+            if [[ "$fuzzy_mode" == "true" ]]; then
+                local safe_q=$(sed 's/[].*[\^$]/\\&/g' <<< "$query")
+                local f_reg=$(sed 's/./&.*/g' <<< "$safe_q")
+                mapfile -t filtered_options < <(grep -iE "$f_reg" "$TEMP_DATA" | head -n 300)
+            else
+                mapfile -t filtered_options < <(grep -iF "$query" "$TEMP_DATA" | head -n 300)
+            fi
+        fi
+        selected_idx=0
+        scroll_offset=0
+    }
+    perform_filter
+
+    function draw() {
+        local view_lines=()
+        local term_width=$(tput cols)
+        ((term_width-=2))
+
+        if [[ -n "$header" ]]; then
+            view_lines+=("${C_HEAD}${header}${C_RST}")
+        fi
+
+        local count=${#filtered_options[@]}
+        if (( selected_idx < scroll_offset )); then scroll_offset=$selected_idx; fi
+        if (( selected_idx >= scroll_offset + height )); then scroll_offset=$((selected_idx - height + 1)); fi
+        [[ $scroll_offset -lt 0 ]] && scroll_offset=0
+
+        for (( i=0; i<height; i++ )); do
+            local idx=$(( scroll_offset + i ))
+            if (( idx < count )); then
+                local item="${filtered_options[$idx]}"
+                if [[ ${#item} -gt $((term_width - 4)) ]]; then item="${item:0:$((term_width - 5))}…"; fi
+
+                local prefix="  "
+                local chk=""
+                if [[ $limit -eq 0 || $limit -gt 1 ]]; then
+                    if [[ -n "${SELECTED_ITEMS["$item"]}" ]]; then chk="${C_SEL_FG}${selected_prefix}${C_RST}"; else chk="${C_UNSEL_FG}${unselected_prefix}${C_RST}"; fi
+                fi
+
+                if (( idx == selected_idx )); then
+                    prefix="${C_IND}${indicator} ${C_RST}"
+                    if [[ -n "$query" ]]; then view_lines+=("${prefix}${chk}${C_MATCH}${item}${C_RST}"); else view_lines+=("${prefix}${chk}${C_IND}${item}${C_RST}"); fi
+                else
+                    view_lines+=("${prefix}${chk}${CSI}2m${item}${C_RST}")
+                fi
+            else
+                view_lines+=("") 
+            fi
+        done
+
+        local prompt_w=${#prompt_char}
+        local input_width=$(( term_width - prompt_w - 1 ))
+        [[ $input_width -lt 5 ]] && input_width=5
+
+        if (( cursor_pos >= input_scroll_offset + input_width )); then
+            input_scroll_offset=$(( cursor_pos - input_width + 1 ))
+        elif (( cursor_pos < input_scroll_offset )); then
+            input_scroll_offset=$cursor_pos
+        fi
+        
+        local visible_content="${query:$input_scroll_offset:$input_width}"
+        local rel_cursor=$(( cursor_pos - input_scroll_offset ))
+        local rendered_input=""
+
+        if [[ -z "$query" ]]; then
+            local visible_ph="${placeholder:0:$input_width}"
+            local p_char="${visible_ph:0:1}"
+            local p_rest="${visible_ph:1}"
+            [[ -z "$p_char" ]] && p_char=" " 
+            if [[ $cursor_visible -eq 1 ]]; then rendered_input="${CSI}7m${p_char}${CSI}27m${C_PLACE}${p_rest}"; else rendered_input="${C_PLACE}${visible_ph}"; fi
+        else
+            local char_under="${visible_content:rel_cursor:1}"
+            [[ -z "$char_under" ]] && char_under=" "
+            local left_part="${visible_content:0:rel_cursor}"
+            local right_part="${visible_content:rel_cursor+1}"
+            if [[ $cursor_visible -eq 1 ]]; then rendered_input="${C_TEXT}${left_part}${CSI}7m${char_under}${CSI}27m${C_TEXT}${right_part}"; else rendered_input="${C_TEXT}${visible_content}"; fi
+        fi
+        local prompt_line="${C_PROMPT}${prompt_char}${C_RST}${rendered_input}${C_RST}"
+
+        local final_buffer=()
+        if [[ "$reverse_mode" == "true" ]]; then
+            [[ -n "$header" ]] && final_buffer+=("${view_lines[0]}")
+            local start_l=0; [[ -n "$header" ]] && start_l=1
+            for ((j=start_l; j<start_l+height; j++)); do final_buffer+=("${view_lines[$j]}"); done
+            final_buffer+=("$prompt_line")
+        else
+            [[ -n "$header" ]] && final_buffer+=("${view_lines[0]}")
+            final_buffer+=("$prompt_line")
+            local start_l=0; [[ -n "$header" ]] && start_l=1
+            for ((j=start_l; j<start_l+height; j++)); do final_buffer+=("${view_lines[$j]}"); done
+        fi
+
+        tput cuu $((total_height - 1)) >&2
+        printf "\r" >&2
+        local num_lines=${#final_buffer[@]}
+        for (( i=0; i<num_lines; i++ )); do
+            printf "${TP_EL}%s" "${final_buffer[$i]}" >&2
+            if (( i < num_lines - 1 )); then printf "\n" >&2; fi
+        done
+    }
+
+    while true; do
+        draw
+
+        IFS= read -rsn1 -t 0.5 key < /dev/tty
+        local exit_code=$?
+
+        if [[ $exit_code -ne 0 ]]; then
+            ((cursor_visible = 1 - cursor_visible))
+            continue
+        fi
+        cursor_visible=1
+
+        if [[ $key == $ESC ]]; then
+            read -rsn5 -t 0.01 seq < /dev/tty
+            if [[ -z "$seq" ]]; then
+                tput cuu $((total_height - 1)) >&2; printf "\r" >&2; tput ed >&2
+                tput cnorm >&2; rm -f "$TEMP_DATA"; return 130
+            fi
+            case "$seq" in
+                "[A") ((selected_idx--)); [[ $selected_idx -lt 0 ]] && selected_idx=0 ;;
+                "[B") ((selected_idx++)); local max=$(( ${#filtered_options[@]} - 1 )); [[ $selected_idx -gt $max ]] && selected_idx=$max ;;
+                "[C") ((cursor_pos++)); [[ $cursor_pos -gt ${#query} ]] && cursor_pos=${#query} ;;
+                "[D") ((cursor_pos--)); [[ $cursor_pos -lt 0 ]] && cursor_pos=0 ;;
+                "[H"|"[1~"|"[7~") cursor_pos=0 ;;
+                "[F"|"[4~"|"[8~") cursor_pos=${#query} ;;
+                "[3~") if (( cursor_pos < ${#query} )); then local left="${query:0:cursor_pos}"; local right="${query:cursor_pos+1}"; query="${left}${right}"; perform_filter; fi ;;
+            esac
+
+        elif [[ "$key" == "" ]]; then
+            tput cuu $((total_height - 1)) >&2; printf "\r" >&2; tput ed >&2
+            tput cnorm >&2; rm -f "$TEMP_DATA"
+            
+            if [[ ${#SELECTED_ITEMS[@]} -gt 0 ]]; then
+                for k in "${!SELECTED_ITEMS[@]}"; do echo "$k"; done
+                return 0
+            elif [[ ${#filtered_options[@]} -gt 0 ]]; then
+                echo "${filtered_options[$selected_idx]}"
+                return 0
+            fi
+            [[ "$strict_output" == "true" ]] && return 1 || return 0
+
+        elif [[ "$key" == $'\t' ]]; then
+             if [[ $limit -eq 0 || $limit -gt 1 ]]; then
+                 if [[ ${#filtered_options[@]} -gt 0 ]]; then
+                     local it="${filtered_options[$selected_idx]}"
+                     if [[ -n "${SELECTED_ITEMS["$it"]}" ]]; then
+                         unset SELECTED_ITEMS["$it"]
+                     else
+                         if [[ $limit -eq 0 ]] || [[ ${#SELECTED_ITEMS[@]} -lt $limit ]]; then
+                             SELECTED_ITEMS["$it"]=1
+                             if [[ "$auto_advance" == "true" ]]; then ((selected_idx++)); fi
+                         fi
+                     fi
+                 fi
+             fi
+
+        elif [[ "$key" == $'\x7f' || "$key" == $'\b' ]]; then
+            if (( cursor_pos > 0 )); then local left="${query:0:cursor_pos-1}"; local right="${query:cursor_pos}"; query="${left}${right}"; ((cursor_pos--)); perform_filter; fi
+
+        elif [[ "$key" =~ [[:print:]] ]]; then
+            local left="${query:0:cursor_pos}"; local right="${query:cursor_pos}"
+            query="${left}${key}${right}"; ((cursor_pos++)); perform_filter
+        fi
+        
+        local max=$(( ${#filtered_options[@]} - 1 ))
+        [[ $selected_idx -lt 0 ]] && selected_idx=0
+        [[ $selected_idx -gt $max ]] && selected_idx=$max
+        [[ $max -lt 0 ]] && selected_idx=0
+    done
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    cmd_filter "${@}"
+fi

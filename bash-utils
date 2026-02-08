@@ -1,0 +1,241 @@
+#!/bin/bash
+
+# Validación
+# [[ ! -x /usr/bin/ansi2txt ]] && printf "No se encontro 'ansi2txt', saliendo...\n" && exit 1
+
+SELF=${0##*/}
+REALPATH=$(dirname "$(realpath "$0")")
+THEME="default"
+
+function source-colors(){
+  local theme="${1:-default}"
+  colors="${REALPATH}/src/colors/colors.json"
+  
+  if [[ ! -f "$colors" ]]; then return; fi
+
+  local theme_json=$(jq -r ".themes[\"${theme}\"]" "${colors}")
+
+  while IFS="=" read -r key value; do
+      printf -v "$key" %b "$value"
+  done < <(echo "$theme_json" | jq -r 'to_entries[] | "\(.key)=\(.value)"')
+}
+
+source-colors "${THEME}"
+
+function __cmd_file(){
+  if [[ -f "${REALPATH}/src/scripts/file" ]]; then
+      source "${REALPATH}/src/scripts/file"
+      cmd_file "${@}" 
+  else
+      echo "Error: script 'file' not found in ${REALPATH}/src/scripts/"
+  fi
+}
+
+function __messagebox(){
+  if [[ -f "${REALPATH}/src/scripts/messagebox" ]]; then
+      source "${REALPATH}/src/scripts/messagebox"
+      messagebox "${@}"
+  else
+      echo "Error: script 'messagebox' not found"
+  fi
+}
+
+function __confirm(){
+  if [[ -f "${REALPATH}/src/scripts/confirm" ]]; then
+      source "${REALPATH}/src/scripts/confirm"
+      cmd_confirm "${@}"
+  else
+      echo "Error: script 'confirm' not found"
+  fi
+}
+
+function __choose(){
+  
+  if [[ -f "${REALPATH}/src/scripts/choose" ]]; then 
+    source "${REALPATH}/src/scripts/choose"
+    cmd_choose "${@}"
+  else 
+    echo "Error: script 'choose' not found"
+  fi 
+}
+
+function __spin(){
+  if [[ -f "${REALPATH}/src/scripts/spin" ]]; then 
+    source "${REALPATH}/src/scripts/spin"
+    cmd_spin "${@}"
+  else 
+    echo "Error: script 'spin' not found"
+  fi 
+}
+
+function __input(){
+  if [[ -f "${REALPATH}/src/scripts/input" ]]; then 
+    source "${REALPATH}/src/scripts/input"
+    cmd_input "${@}"
+  else 
+    echo "Error: script 'input' not found"
+  fi 
+}
+
+function __write(){
+  if [[ -f "${REALPATH}/src/scripts/write" ]]; then 
+    source "${REALPATH}/src/scripts/write"
+    cmd_write "${@}"
+  else 
+    echo "Error: script 'write' not found"
+  fi 
+}
+
+function __filter(){
+  if [[ -f "${REALPATH}/src/scripts/filter" ]]; then 
+    source "${REALPATH}/src/scripts/filter"
+    cmd_filter "${@}"
+  else 
+    echo "Error: script 'filter' not found"
+  fi 
+}
+
+function __log(){
+  if [[ -f "${REALPATH}/src/scripts/log" ]]; then 
+    source "${REALPATH}/src/scripts/log"
+    cmd_log "${@}"
+  else 
+    echo "Error: script 'log' not found"
+  fi 
+}
+
+function __style(){
+  if [[ -f "${REALPATH}/src/scripts/style" ]]; then 
+    source "${REALPATH}/src/scripts/style"
+    cmd_style "${@}"
+  else 
+    echo "Error: script 'style' not found"
+  fi 
+}
+
+function __text(){
+  if [[ -f "${REALPATH}/src/scripts/text" ]]; then 
+    source "${REALPATH}/src/scripts/text"
+    cmd_text "${@}"
+  else 
+    echo "Error: 'text' not found"
+  fi 
+}
+
+function __table(){
+  if [[ -f "${REALPATH}/src/scripts/table" ]]; then 
+    source "${REALPATH}/src/scripts/table"
+    cmd_table "${@}"
+  else 
+    echo "Error: 'table' not found"
+  fi 
+}
+
+function __pager(){
+    if [[ -f "${REALPATH}/src/scripts/pager" ]]; then 
+        source "${REALPATH}/src/scripts/pager"
+        cmd_pager "${@}"
+    else
+        echo "Error: 'table' not found"
+    fi
+}
+
+function helpPanel(){
+  msg="Usage: ${SELF} <command> [flags]
+
+A tool for ${pink}shell scripts${end}.
+
+Flags:
+  -h, --help        Show context-sensitive help.
+  -v, --version     Print the version number
+
+Commands:
+  ${blue}choose${end}             Choose an option from a list of choices
+  ${blue}confirm${end}            Ask a user to confirm an action
+  ${blue}file${end}               Pick a file from a folder
+  ${blue}messagebox${end}         Display a message box
+  ${blue}spin${end}               Display spinner while running a command
+  ${blue}write${end}              Prompt for long-form text
+  ${blue}input${end}              Prompt for some input
+  ${blue}filter${end}             Filter items from a list
+  ${blue}log${end}                Log messages to output
+  ${blue}table${end}              Render a table of data
+  ${blue}text${end}               Show a beautifiul text
+  ${blue}style${end}              Apply coloring, borders, spacing to text
+  ${blue}pager${end}              Scroll through a file
+
+Run \"${SELF} <command> --help\" for more information on a command."""
+
+  printf "%b\n" "${msg}"
+  return 0 
+} 
+
+# --- FUNCIÓN PRINCIPAL ---
+
+function main(){
+  # 1. Si no hay argumentos, mostramos ayuda
+  if [[ -z "$1" ]]; then
+      helpPanel
+      exit 1
+  fi
+
+  # 2. Capturamos el subcomando y hacemos shift
+  local subcmd="$1"
+  shift 
+
+  # 3. Enrutamos al comando correcto
+  case "$subcmd" in
+      file)
+          __cmd_file "$@"
+          ;;
+      choose)
+          __choose "$@"
+          ;;
+      confirm)
+          __confirm "$@"
+          ;;
+      messagebox)
+          __messagebox "${@}"
+          ;;
+      spin)
+         __spin "${@}"
+         ;; 
+      write) 
+        __write "${@}"
+        ;;
+      input)
+        __input "${@}"
+        ;; 
+      filter)
+        __filter "${@}"
+        ;; 
+      log)
+        __log "${@}"
+        ;; 
+      style)
+        __style "${@}"
+        ;;
+      text)
+        __text "${@}"
+        ;; 
+      table) 
+        __table "${@}"
+        ;;
+      pager)
+        __pager "${@}"
+        ;;
+      -h|--help)
+          helpPanel
+          ;;
+      *)
+          # echo -e "${red}Error: Comando '$subcmd' no reconocido.${end}"
+          helpPanel
+          echo -e "\n${red}${SELF}: error: expected one of \"choose\", \"confirm\", \"file\", ...${end}\n"
+
+          exit 1
+          ;;
+  esac
+}
+
+# Pasamos todos los argumentos al main
+main "${@}"

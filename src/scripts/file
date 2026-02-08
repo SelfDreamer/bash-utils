@@ -1,0 +1,471 @@
+#!/usr/bin/env bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$SCRIPT_DIR/messagebox" ]]; then
+    source "$SCRIPT_DIR/messagebox"
+else
+    function messagebox() { echo "Error: messagebox.sh not found"; }
+fi
+
+function cmd_file() {
+    function make_ansi() {
+        local fg=$1; local bg=$2; local seq=""
+        [[ -n "$fg" ]] && seq+="\033[38;5;${fg}m"
+        [[ -n "$bg" ]] && seq+="\033[48;5;${bg}m"
+        printf "%s" "$seq"
+    }
+
+    function die() {
+        echo -e "\033[31mError: $1\033[0m" >&2
+        rm -f "$TEMP_CACHE" 2>/dev/null
+        return 1
+    }
+
+    local current_path="."
+    local cursor=">"
+    local show_all=false
+    local show_perms=true
+    local show_size=true
+    local show_header=true
+    local show_help_footer=true
+    local max_rows=10
+    local padding_h=0 
+
+    local initial_limit=50
+    local lazy_step=5
+    local visible_limit=$initial_limit
+
+    local c_cursor_fg="212"; local c_cursor_bg=""
+    local c_symlink_fg="36"; local c_symlink_bg=""
+    local c_dir_fg="5";      local c_dir_bg=""
+    local c_file_fg="255";   local c_file_bg=""
+    local c_perm_fg="244";   local c_perm_bg=""
+    local c_size_fg="244";   local c_size_bg=""
+    local c_sel_fg="212";    local c_sel_bg=""
+    
+    local header_title=" File "
+    local header_text=""
+    local header_align="center"
+    local header_border="rounded"
+    local header_type="Info"
+    local header_max_width=0
+    local header_show_preffix=false
+    local header_transmit_color=""
+    local header_preffix_pad="0 0"
+
+    local c_h_title_fg=""
+    local c_h_title_bg=""
+    local c_h_text_fg="2" 
+    local c_h_text_bg=""
+    local c_h_border_fg="244"
+    local c_h_preffix_fg=""
+    local c_h_preffix_bg=""
+    
+    local h_bold=false
+    local h_italic=false
+    local h_underline=false
+    local h_strike=false
+
+    local c_path_fg=""
+    local c_path_bg=""
+    local path_bold=false
+    local path_underline=false
+
+    local TEMP_CACHE
+    TEMP_CACHE=$(mktemp) || return 1
+
+    function show_help_panel() {
+        cat <<EOF
+Usage: bash-utils file [<path>] [flags]
+
+Pick a file from a folder.
+
+Arguments:
+  [<path>]    The path to the folder to begin traversing
+
+Flags:
+  -h, --help                Show context-sensitive help.
+  -c, --cursor=">"          The cursor character
+  -a, --all                 Show hidden and 'dot' files
+  -p, --[no-]permissions    Show file permissions
+  -s, --[no-]size           Show file size
+      --height=10           Maximum number of files to display
+      --no-header           Hide the header box
+      --padding="0 0"       Padding (Horizontal)
+
+Header Options (Messagebox Integration):
+      --header.title="File"        Title text
+      --header.text=""             Custom message (%{PATH}% for current path)
+      --header.border="rounded"    Border style (rounded, normal, double, thick, hidden)
+      --header.type="Info"         Type (Info, Warning, Error, Hint)
+      --header.show-preffix        Show the icon prefix (Hidden by default)
+      --header.title.align         Title alignment (left, center, right)
+      --header.title.transmit-color Sync colors (title to preffix / preffix to title)
+      --header.preffix.pad="0 0"   Padding for the icon
+      --header.max-width=0         Max width (0=Full)
+
+Style Flags (Foreground/Background 0-255):
+  --cursor.foreground / .background
+  --symlink.foreground / .background
+  --directory.foreground / .background
+  --file.foreground / .background
+  --permissions.foreground / .background
+  --selected.foreground / .background
+  --file-size.foreground / .background
+  
+  --header.title.foreground / .background
+  --header.text.foreground / .background
+  --header.border.foreground
+  --header.preffix.foreground / .background
+  --header.bold, .italic, .underline, .strike
+
+Path Styles (Inside Header):
+  --path.foreground="4"
+  --path.background=""
+  --path.bold
+  --path.underline
+EOF
+    }
+
+    local args_pos=()
+    local parse_args=()
+    
+    while [[ $# -gt 0 ]]; do
+        if [[ "$1" == --*=* ]]; then
+            local key="${1%%=*}"; local val="${1#*=}"; parse_args+=("$key" "$val")
+        else
+            parse_args+=("$1")
+        fi
+        shift
+    done
+    set -- "${parse_args[@]}"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) show_help_panel; rm -f "$TEMP_CACHE"; return 0 ;;
+            -a|--all) show_all=true ;;
+            -p|--permissions) show_perms=true ;;
+            --no-permissions) show_perms=false ;;
+            -s|--size) show_size=true ;;
+            --no-size) show_size=false ;;
+            --no-header) show_header=false ;;
+            --no-show-help) show_help_footer=false ;;
+            
+            --path.bold) path_bold=true ;;
+            --path.underline) path_underline=true ;;
+            
+            --header.show-preffix) header_show_preffix=true ;;
+            --header.bold) h_bold=true ;;
+            --header.italic) h_italic=true ;;
+            --header.underline) h_underline=true ;;
+            --header.strike) h_strike=true ;;
+
+            --path|--cursor|-c|--height|--header|--header.text|--header.title|--header.border|--header.title.align|--padding| \
+            --header.type|--header.max-width|--header.title.transmit-color|--header.preffix.pad| \
+            --cursor.foreground|--cursor.background|--symlink.foreground|--symlink.background|--directory.foreground|--directory.background| \
+            --file.foreground|--file.background|--permissions.foreground|--permissions.background|--selected.foreground|--selected.background| \
+            --file-size.foreground|--file-size.background|--header.title.foreground|--header.title.background| \
+            --header.text.foreground|--header.text.background|--header.border.foreground|--header.preffix.foreground|--header.preffix.background| \
+            --path.foreground|--path.background)
+                if [[ $# -lt 2 ]]; then die "Flag '$1' requires an argument."; return 1; fi
+                local val="$2"
+                case "$1" in
+                    --path) current_path="$val" ;;
+                    --cursor|-c) cursor="$val" ;;
+                    --height) max_rows="$val" ;;
+                    
+                    --header|--header.text) header_text="$val" ;;
+                    --header.title) header_title="$val" ;;
+                    --header.border) 
+                        [[ ! "$val" =~ ^(rounded|normal|double|thick|hidden)$ ]] && die "Invalid border: $val"
+                        header_border="$val" ;;
+                    --header.title.align) 
+                        [[ ! "$val" =~ ^(left|center|right)$ ]] && die "Invalid align: $val"
+                        header_align="$val" ;;
+                    --header.type) 
+                        [[ ! "$val" =~ ^(Info|Warning|Error|Hint)$ ]] && die "Invalid type: $val"
+                        header_type="$val" ;;
+                    --header.max-width) header_max_width="$val" ;;
+                    --header.title.transmit-color) header_transmit_color="$val" ;;
+                    --header.preffix.pad) header_preffix_pad="$val" ;;
+                    
+                    --padding) 
+                        if [[ "$val" =~ [0-9]+\ +([0-9]+) ]]; then padding_h="${BASH_REMATCH[1]}";
+                        elif [[ "$val" =~ ^[0-9]+$ ]]; then padding_h="$val"; fi ;;
+
+                    --cursor.foreground)    c_cursor_fg="$val" ;;
+                    --cursor.background)    c_cursor_bg="$val" ;;
+                    --symlink.foreground)   c_symlink_fg="$val" ;;
+                    --symlink.background)   c_symlink_bg="$val" ;;
+                    --directory.foreground) c_dir_fg="$val" ;;
+                    --directory.background) c_dir_bg="$val" ;;
+                    --file.foreground)      c_file_fg="$val" ;;
+                    --file.background)      c_file_bg="$val" ;;
+                    --permissions.foreground) c_perm_fg="$val" ;;
+                    --permissions.background) c_perm_bg="$val" ;;
+                    --selected.foreground)  c_sel_fg="$val" ;;
+                    --selected.background)  c_sel_bg="$val" ;;
+                    --file-size.foreground) c_size_fg="$val" ;;
+                    --file-size.background) c_size_bg="$val" ;;
+                    
+                    --header.title.foreground) c_h_title_fg="$val" ;;
+                    --header.title.background) c_h_title_bg="$val" ;; 
+                    --header.text.foreground)  c_h_text_fg="$val" ;;
+                    --header.text.background)  c_h_text_bg="$val" ;;
+                    --header.border.foreground) c_h_border_fg="$val" ;;
+                    --header.preffix.foreground) c_h_preffix_fg="$val" ;;
+                    --header.preffix.background) c_h_preffix_bg="$val" ;;
+                    
+                    --path.foreground) c_path_fg="$val" ;;
+                    --path.background) c_path_bg="$val" ;;
+                esac
+                shift ;; 
+            
+            -*) die "Unknown flag: $1"; return 1 ;;
+            *) args_pos+=("$1") ;;
+        esac
+        shift 
+    done
+
+    [[ ${#args_pos[@]} -gt 0 ]] && current_path="${args_pos[0]}"
+
+    local style_cursor=$(make_ansi "$c_cursor_fg" "$c_cursor_bg")
+    local style_dir=$(make_ansi "$c_dir_fg" "$c_dir_bg")
+    local style_file=$(make_ansi "$c_file_fg" "$c_file_bg")
+    local style_link=$(make_ansi "$c_symlink_fg" "$c_symlink_bg")
+    local style_perm=$(make_ansi "$c_perm_fg" "$c_perm_bg")
+    local style_size=$(make_ansi "$c_size_fg" "$c_size_bg")
+    local style_sel=$(make_ansi "$c_sel_fg" "$c_sel_bg")
+    
+    local col_reset=$'\033[0m'
+    local col_msg=$'\033[38;2;95;95;95m' 
+
+    current_path=$(cd "$current_path" 2>/dev/null && pwd)
+    [[ -z "$current_path" ]] && current_path="$PWD"
+
+    trap 'rm -f "$TEMP_CACHE"; echo -ne "\033[?25h"' EXIT
+    echo -ne "\033[?25l" >&2 
+
+    local last_path=""
+    local selected_index=0
+    local scroll_offset=0
+    local total_files=0
+    local cached_header=""
+    local max_size_len=0
+    local pad_str=""
+    if (( padding_h > 0 )); then printf -v pad_str "%*s" "$padding_h" ""; fi
+
+    while true; do
+        if [[ "$current_path" != "$last_path" ]]; then
+            echo -ne "\033[H\033[J" >&2
+            echo -e "${pad_str}${col_msg}[+] Loading files...${col_reset}" >&2
+            
+            last_path="$current_path"
+            selected_index=0
+            scroll_offset=0
+            visible_limit=$initial_limit
+            max_size_len=1
+
+            if [[ "$show_header" == "true" ]]; then
+                local visual_path="$current_path"
+                [[ "$visual_path" != "/" ]] && visual_path="${visual_path}/"
+                
+                local use_path_fg="${c_path_fg}"
+                if [[ -z "$use_path_fg" && -z "$header_text" ]]; then
+                    use_path_fg="4" 
+                fi
+                
+                local s_path_extra=""
+                [[ "$path_bold" == "true" ]] && s_path_extra+="\033[1m"
+                [[ "$path_underline" == "true" ]] && s_path_extra+="\033[4m"
+                
+                local s_path_col=""
+                [[ -n "$use_path_fg" || -n "$c_path_bg" ]] && s_path_col=$(make_ansi "$use_path_fg" "$c_path_bg")
+                
+                local s_header_base=$(make_ansi "$c_h_text_fg" "$c_h_text_bg")
+                local styled_path="${s_path_extra}${s_path_col}${visual_path}${col_reset}${s_header_base}"
+                
+                local display_msg=""
+                local placeholder_token="%{PATH}%"
+                
+                if [[ -n "$header_text" ]]; then
+                    if [[ "$header_text" == *"$placeholder_token"* ]]; then
+                        display_msg="${header_text//$placeholder_token/$styled_path}"
+                    else
+                        display_msg="${header_text}"
+                    fi
+                else
+                    display_msg="Path: ${styled_path}"
+                fi
+                
+                local mbox_args=(
+                    --title "$header_title"
+                    --message "$display_msg"
+                    --to-end-tty
+                    --border "$header_border"
+                    --title.align "$header_align"
+                    --type "$header_type"
+                )
+                
+                [[ -n "$c_h_title_fg" ]] && mbox_args+=( --title.foreground "$c_h_title_fg" )
+                [[ -n "$c_h_title_bg" ]] && mbox_args+=( --title.background "$c_h_title_bg" )
+                
+                [[ -n "$c_h_text_fg" ]] && mbox_args+=( --foreground "$c_h_text_fg" )
+                [[ -n "$c_h_text_bg" ]] && mbox_args+=( --background "$c_h_text_bg" )
+                
+                [[ -n "$c_h_border_fg" ]] && mbox_args+=( --border.foreground "$c_h_border_fg" )
+                
+                if [[ "$header_show_preffix" == "false" ]]; then
+                    mbox_args+=( --no-preffix )
+                else
+                    [[ -n "$c_h_preffix_fg" ]] && mbox_args+=( --preffix.foreground "$c_h_preffix_fg" )
+                    [[ -n "$c_h_preffix_bg" ]] && mbox_args+=( --preffix.background "$c_h_preffix_bg" )
+                    [[ -n "$header_preffix_pad" ]] && mbox_args+=( --preffix.pad "$header_preffix_pad" )
+                fi
+                
+                [[ -n "$header_transmit_color" ]] && mbox_args+=( --title.transmit-color "$header_transmit_color" )
+                [[ "$header_max_width" -gt 0 ]] && mbox_args+=( --max-width "$header_max_width" )
+                
+                [[ "$h_bold" == "true" ]] && mbox_args+=( --bold )
+                [[ "$h_italic" == "true" ]] && mbox_args+=( --italic )
+                [[ "$h_underline" == "true" ]] && mbox_args+=( --underline )
+                [[ "$h_strike" == "true" ]] && mbox_args+=( --strike )
+
+                cached_header=$(messagebox "${mbox_args[@]}")
+            fi
+
+            local ls_opts=( "-l" "--group-directories-first" "--time-style=+" "-h" "--color=never" )
+            [[ "$show_all" == "true" ]] && ls_opts+=( "-A" )
+
+            : > "$TEMP_CACHE"
+            [[ "$current_path" != "/" ]] && echo -e "drwxr-xr-x\t-\tDIR\t.." >> "$TEMP_CACHE"
+            
+            LC_ALL=C /bin/ls "${ls_opts[@]}" "$current_path" 2>/dev/null | awk '
+                /^total/ { next }
+                {
+                    c = substr($1,1,1)
+                    if(c=="d") type="DIR"; else if(c=="l") type="LINK"; else type="FILE"
+                    name=""; for(i=6;i<=NF;i++) name = name (i==6?"":" ") $i
+                    print $1 "\t" $5 "\t" type "\t" name
+                }
+            ' >> "$TEMP_CACHE"
+
+            total_files=$(wc -l < "$TEMP_CACHE")
+            max_size_len=$(awk -F"\t" '{l=length($2); if(l>m)m=l} END{print m}' "$TEMP_CACHE")
+        fi
+
+        if (( selected_index >= visible_limit - 1 )); then
+             if (( visible_limit < total_files )); then visible_limit=$(( visible_limit + lazy_step )); fi
+        fi
+
+        if (( selected_index < scroll_offset )); then
+            scroll_offset=$selected_index
+        elif (( selected_index >= scroll_offset + max_rows )); then
+            scroll_offset=$(( selected_index - max_rows + 1 ))
+        fi
+
+        echo -ne "\033[H" >&2
+        [[ -n "$cached_header" ]] && echo -e "${cached_header}" >&2
+
+        awk -F"\t" \
+            -v OFFSET="$scroll_offset" \
+            -v HEIGHT="$max_rows" \
+            -v SEL_IDX="$selected_index" \
+            -v LIMIT="$visible_limit" \
+            -v PAD="$pad_str" \
+            -v CURSOR="$cursor" \
+            -v SHOW_PERM="$show_perms" \
+            -v SHOW_SIZE="$show_size" \
+            -v SIZE_W="$max_size_len" \
+            -v S_CUR="$style_cursor" \
+            -v S_DIR="$style_dir" \
+            -v S_FILE="$style_file" \
+            -v S_LINK="$style_link" \
+            -v S_PERM="$style_perm" \
+            -v S_SIZE="$style_size" \
+            -v S_SEL="$style_sel" \
+            -v RESET="$col_reset" \
+            '
+            BEGIN { printed=0 }
+            {
+                idx = NR - 1
+                if (idx >= LIMIT) exit
+                if (idx < OFFSET) next
+                if (printed >= HEIGHT) exit
+
+                perm = $1; size = $2; type = $3; name = $4
+                is_sel = (idx == SEL_IDX)
+                
+                c_name = S_FILE
+                if (type == "DIR") c_name = S_DIR
+                if (type == "LINK") c_name = S_LINK
+                
+                c_perm = S_PERM; c_size = S_SIZE; c_cursor = S_CUR
+                char_cursor = " "
+
+                if (is_sel) {
+                    c_name = S_SEL; c_perm = S_SEL; c_size = S_SEL; c_cursor = S_SEL
+                    char_cursor = CURSOR
+                }
+
+                line = PAD c_cursor char_cursor RESET " "
+                if (SHOW_PERM == "true") line = line c_perm perm RESET " "
+                if (SHOW_SIZE == "true") line = line c_size sprintf("%" SIZE_W "s", size) RESET " "
+                line = line c_name name RESET
+
+                print line "\033[K"
+                printed++
+            }
+            END { while (printed < HEIGHT) { print "\033[K"; printed++ } }
+        ' "$TEMP_CACHE" >&2
+
+        if [[ "$show_help_footer" == "true" ]]; then
+             local shown_count=$visible_limit
+             if (( total_files < visible_limit )); then shown_count=$total_files; fi
+             echo -ne "${pad_str}${col_msg}↓↑ navigate • lazy (${shown_count}/${total_files}) • enter select${col_reset}\033[K\n" >&2
+        fi
+        echo -ne "\033[J" >&2
+
+        read -rsn1 key
+        if [[ $key == $'\x1b' ]]; then
+            read -rsn2 -t 0.01 key
+            case "$key" in
+                '[A') ((selected_index--)); if ((selected_index < 0)); then selected_index=0; fi ;; 
+                '[B') 
+                    ((selected_index++))
+                    local eff_max=$(( visible_limit < total_files ? visible_limit : total_files ))
+                    if (( selected_index >= eff_max )); then selected_index=$((eff_max-1)); fi 
+                    ;;
+                '[D') 
+                     [[ "$current_path" != "/" ]] && current_path=$(dirname "$current_path") ;;
+            esac
+        else
+            case "$key" in
+                "") # Enter
+                    local line_sel=$(sed -n "$((selected_index+1))p" "$TEMP_CACHE")
+                    local f_type=$(echo "$line_sel" | awk -F"\t" '{print $3}')
+                    local f_name=$(echo "$line_sel" | awk -F"\t" '{print $4}')
+                    
+                    if [[ "$f_name" == ".." ]]; then
+                        current_path=$(dirname "$current_path")
+                    else
+                        local target="$current_path/$f_name"
+                        [[ "$current_path" == "/" ]] && target="/$f_name"
+                        
+                        if [[ "$f_type" == "DIR" ]]; then
+                            current_path="$target"
+                        else
+                            echo -ne "\033[H\033[J" >&2; echo "$target"; return 0
+                        fi
+                    fi
+                    ;;
+                "q") echo -ne "\033[H\033[J" >&2; return 1 ;;
+            esac
+        fi
+    done
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then 
+  cmd_file "${@}"
+fi
+

@@ -1,0 +1,425 @@
+#!/usr/bin/env bash
+
+strip_ansi() {
+    sed -E '
+        s/\x1b\]8;;[^\x1b]*\x1b\\//g;
+        s/\x1b\][^\x1b\x07]*(\x07|\x1b\\)//g;
+        s/\x1b\[[0-9;?]*[ -/]*[@-~]//g;
+        s/\[[0-9;]*m//g;
+        s/(^|[[:space:]])[0-9]+m/\1/g;
+        s/[0-9]{1,3}m//g;
+        s/[\x07\x1b]//g
+    ' <<< "${1}"
+}
+
+visible_width() {
+    local clean=$(strip_ansi "$1")
+    if command -v wc &> /dev/null && wc -L <<< "test" &> /dev/null; then
+        printf "%s" "$clean" | wc -L
+    else
+        echo ${#clean}
+    fi
+}
+
+ansi_aware_wrap() {
+    local text="$1"
+    local width="$2"
+
+    echo -e "$text" | awk -v width="$width" '
+    function visible_length(str,    stripped) {
+        stripped = str
+        gsub(/\033\]8;;[^\033]*\033\\/, "", stripped)
+        gsub(/\033\][^\033\007]*(\007|\033\\)/, "", stripped)
+        gsub(/\033\[[0-9;?]*[ -/]*[@-~]/, "", stripped)
+        gsub(/\[[0-9;]*m/, "", stripped)
+        gsub(/[0-9]{1,3}m/, "", stripped)
+        gsub(/[\007\033]/, "", stripped)
+        return length(stripped)
+    }
+
+    {
+        line = $0
+        gsub(/\t/, "    ", line)
+        if (length(line) == 0) { print ""; next }
+
+        current_line = ""
+        current_len = 0
+        
+        while (length(line) > 0) {
+            match(line, /[^[:space:]]+/)
+            if (RSTART == 0) { chunk = line; line = "" } 
+            else {
+                gap = substr(line, 1, RSTART - 1)
+                word = substr(line, RSTART, RLENGTH)
+                chunk = gap word
+                line = substr(line, RSTART + RLENGTH)
+            }
+
+            chunk_len = visible_length(chunk)
+            space_left = width - current_len
+
+            if (chunk_len <= space_left) {
+                current_line = current_line chunk
+                current_len += chunk_len
+            } else {
+                if (visible_length(word) > width) {
+                    needed = width - current_len
+                    part_to_fill = substr(chunk, 1, needed)
+                    print current_line part_to_fill
+                    remaining = substr(chunk, needed + 1)
+                    while (visible_length(remaining) > width) {
+                        print substr(remaining, 1, width)
+                        remaining = substr(remaining, width + 1)
+                    }
+                    current_line = remaining
+                    current_len = visible_length(remaining)
+                } else {
+                    if (current_len > 0) print current_line
+                    if (gap != "" && current_len > 0) {
+                        current_line = word
+                        current_len = visible_length(word)
+                    } else {
+                        current_line = chunk
+                        current_len = chunk_len
+                    }
+                }
+            }
+        }
+        if (length(current_line) > 0) print current_line
+    }'
+}
+
+get_style_seq() {
+    local type="$1"
+    local code="$2"
+    if [[ -z "$code" ]]; then echo ""; return; fi
+    
+    local rgb_regex="^[0-9]{1,3};[0-9]{1,3};[0-9]{1,3}$"
+
+    case "$type" in
+        mode)
+            case "$code" in
+                bold) echo -ne "\033[1m" ;;
+                italic) echo -ne "\033[3m" ;;
+                underline) echo -ne "\033[4m" ;;
+                strike) echo -ne "\033[9m" ;;
+            esac
+            ;;
+        fg|bg)
+            local prefix="38"
+            [[ "$type" == "bg" ]] && prefix="48"
+            if [[ "$code" =~ $rgb_regex ]]; then
+                echo -ne "\033[${prefix};2;${code}m"
+            elif [[ "$code" =~ ^[0-9]+$ ]]; then
+                echo -ne "\033[${prefix};5;${code}m"
+            fi
+            ;;
+    esac
+}
+
+function messagebox() { 
+
+    function show_help() {
+        cat <<EOF
+Usage: messagebox [flags] [Message]
+       messagebox [flags] [Title] [Message]
+
+Flags:
+  -h, --help                      Show help
+  -t, --title=""                  Box title
+  -m, --message=""                Box message
+      --type="Info"               Info, Warning, Error, Hint
+      --max-width=0               Max columns (0=TTY)
+      --to-end-tty                Force full width
+      --no-preffix                Hide icon
+
+Style Flags:
+  --border="rounded"          Border style: rounded, normal, double, thick, hidden
+  --title.align="left"        Title alignment: left, center, right
+  --title.transmit-color=""   Sync colors: "title to preffix" OR "preffix to title"
+  --preffix.pad="0 0"         Prefix padding (Left Right)
+  --foreground="0-255|R;G;B"      Text color
+  --background="0-255|R;G;B"      Text background
+  --border.foreground=""          Border color
+  --title.foreground=""           Title color
+  --title.background=""           Title background
+  --preffix.foreground=""         Prefix icon color
+  --preffix.background=""         Prefix icon background
+  --bold, --italic,               Text decorations
+  --underline, --strike
+EOF
+    }
+
+    local title_raw=""
+    local content=""
+    local type="Info"
+    local term_cols=$(tput cols 2>/dev/null || echo 80)
+    local max_allowed_width=$term_cols 
+    local no_prefix=false 
+    local to_end_tty=false
+    local border_style="rounded"
+    local title_align="left"
+    local preffix_pad="0 0"
+    local transmit_direction="" 
+
+    local user_fg="" user_bg="" user_border_fg="" user_title_fg="" user_title_bg=""
+    local user_preffix_fg="" user_preffix_bg=""
+    local text_modes=""
+    local positional_args=()
+
+    while [[ $# -gt 0 ]]; do
+      case "$1" in 
+        -h|--help) show_help; return 0 ;;
+        
+        -t|--title)
+            [[ $# -lt 2 || "$2" == -* ]] && { echo "Error: Missing argument for $1" >&2; return 1; }
+            title_raw="$2"; shift 2 ;;
+        --title=*) title_raw="${1#*=}"; shift ;;
+        
+        --title.align)
+            [[ $# -lt 2 || "$2" == -* ]] && { echo "Error: Missing argument for $1" >&2; return 1; }
+            title_align="$2"; shift 2 ;;
+        --title.align=*) title_align="${1#*=}"; shift ;;
+
+        --title.transmit-color)
+            [[ $# -lt 2 || "$2" == -* ]] && { echo "Error: Missing argument for $1" >&2; return 1; }
+            local val="$2"
+            if [[ "$val" == "title to preffix" ]]; then
+                transmit_direction="t2p"
+            elif [[ "$val" == "preffix to title" ]]; then
+                transmit_direction="p2t"
+            else
+                echo "Error: Invalid value for $1: '$val'" >&2
+                echo "Allowed: 'title to preffix', 'preffix to title'" >&2
+                return 1
+            fi
+            shift 2 ;;
+        
+        --title.transmit-color=*)
+            local val="${1#*=}"
+            if [[ "$val" == "title to preffix" ]]; then
+                transmit_direction="t2p"
+            elif [[ "$val" == "preffix to title" ]]; then
+                transmit_direction="p2t"
+            else
+                echo "Error: Invalid value for ${1%%=*}: '$val'" >&2
+                echo "Allowed: 'title to preffix', 'preffix to title'" >&2
+                return 1
+            fi
+            shift ;;
+
+        -m|--message)
+            [[ $# -lt 2 || "$2" == -* ]] && { echo "Error: Missing argument for $1" >&2; return 1; }
+            content="$2"; shift 2 ;;
+        --message=*) content="${1#*=}"; shift ;;
+        
+        -T|--type)
+            [[ $# -lt 2 || "$2" == -* ]] && { echo "Error: Missing argument for $1" >&2; return 1; }
+            type="$2"; shift 2 ;;
+        --type=*) type="${1#*=}"; shift ;;
+        
+        --max-width)
+             [[ $# -lt 2 || "$2" == -* ]] && { echo "Error: Missing argument for $1" >&2; return 1; }
+             max_allowed_width="$2"; shift 2 ;;
+        --max-width=*) max_allowed_width="${1#*=}"; shift ;;
+        
+        --border)
+             [[ $# -lt 2 || "$2" == -* ]] && { echo "Error: Missing argument for $1" >&2; return 1; }
+             border_style="$2"; shift 2 ;;
+        --border=*) border_style="${1#*=}"; shift ;;
+
+        --to-end-tty) to_end_tty=true; shift ;;
+        --no-preffix) no_prefix=true; shift ;;
+        
+        --foreground) [[ $# -lt 2 || "$2" == -* ]] && { echo "Error: Missing color for $1" >&2; return 1; }; user_fg=$(get_style_seq "fg" "$2"); shift 2 ;;
+        --foreground=*) user_fg=$(get_style_seq "fg" "${1#*=}"); shift ;;
+        
+        --background) [[ $# -lt 2 || "$2" == -* ]] && { echo "Error: Missing color for $1" >&2; return 1; }; user_bg=$(get_style_seq "bg" "$2"); shift 2 ;;
+        --background=*) user_bg=$(get_style_seq "bg" "${1#*=}"); shift ;;
+        
+        --border.foreground) [[ $# -lt 2 || "$2" == -* ]] && { echo "Error: Missing color for $1" >&2; return 1; }; user_border_fg=$(get_style_seq "fg" "$2"); shift 2 ;;
+        --border.foreground=*) user_border_fg=$(get_style_seq "fg" "${1#*=}"); shift ;;
+        
+        --title.foreground) [[ $# -lt 2 || "$2" == -* ]] && { echo "Error: Missing color for $1" >&2; return 1; }; user_title_fg=$(get_style_seq "fg" "$2"); shift 2 ;;
+        --title.foreground=*) user_title_fg=$(get_style_seq "fg" "${1#*=}"); shift ;;
+
+        --title.background) [[ $# -lt 2 || "$2" == -* ]] && { echo "Error: Missing color for $1" >&2; return 1; }; user_title_bg=$(get_style_seq "bg" "$2"); shift 2 ;;
+        --title.background=*) user_title_bg=$(get_style_seq "bg" "${1#*=}"); shift ;;
+
+        --preffix.foreground) [[ $# -lt 2 || "$2" == -* ]] && { echo "Error: Missing color for $1" >&2; return 1; }; user_preffix_fg=$(get_style_seq "fg" "$2"); shift 2 ;;
+        --preffix.foreground=*) user_preffix_fg=$(get_style_seq "fg" "${1#*=}"); shift ;;
+        
+        --preffix.background) [[ $# -lt 2 || "$2" == -* ]] && { echo "Error: Missing color for $1" >&2; return 1; }; user_preffix_bg=$(get_style_seq "bg" "$2"); shift 2 ;;
+        --preffix.background=*) user_preffix_bg=$(get_style_seq "bg" "${1#*=}"); shift ;;
+        
+        --preffix.pad) [[ $# -lt 2 || "$2" == -* ]] && { echo "Error: Missing padding for $1" >&2; return 1; }; preffix_pad="$2"; shift 2 ;;
+        --preffix.pad=*) preffix_pad="${1#*=}"; shift ;;
+
+        --bold) text_modes+=$(get_style_seq "mode" "bold"); shift ;;
+        --italic) text_modes+=$(get_style_seq "mode" "italic"); shift ;;
+        --underline) text_modes+=$(get_style_seq "mode" "underline"); shift ;;
+        --strike) text_modes+=$(get_style_seq "mode" "strike"); shift ;;
+
+        -*) echo "Error: Unknown flag '$1'" >&2; return 1 ;;
+        *) positional_args+=("$1"); shift ;;
+      esac 
+    done 
+
+    # --- VALIDACIONES ---
+    case "$border_style" in
+        rounded|normal|double|thick|hidden) ;;
+        *) echo "Error: Invalid value for --border: '$border_style'" >&2; return 1 ;;
+    esac
+    case "$type" in
+        Info|Warning|Error|Hint) ;;
+        *) echo "Error: Invalid value for --type: '$type'" >&2; return 1 ;;
+    esac
+    case "$title_align" in
+        left|center|right) ;;
+        *) echo "Error: Invalid value for --title.align: '$title_align'" >&2; return 1 ;;
+    esac
+    
+    local pad_l=0 pad_r=0
+    if [[ "$preffix_pad" =~ ^[0-9]+[[:space:]]+[0-9]+$ ]]; then
+        read -r pad_l pad_r <<< "$preffix_pad"
+    elif [[ "$preffix_pad" =~ ^[0-9]+$ ]]; then
+        pad_l="$preffix_pad"; pad_r=0
+    else
+        echo "Error: Invalid value for --preffix.pad: '$preffix_pad' (Expected 'N N')" >&2; return 1
+    fi
+
+    if [[ -n "$transmit_direction" ]]; then
+        if [[ "$transmit_direction" == "t2p" ]]; then
+            user_preffix_fg="$user_title_fg"
+            user_preffix_bg="$user_title_bg"
+        elif [[ "$transmit_direction" == "p2t" ]]; then
+            user_title_fg="$user_preffix_fg"
+            user_title_bg="$user_preffix_bg"
+        fi
+    fi
+
+    if [[ "$title_raw" =~ ^[[:space:]]*$ ]]; then title_raw=""; fi
+
+    local pos_count=${#positional_args[@]}
+    if [[ $pos_count -gt 0 ]]; then
+        if [[ $pos_count -eq 1 ]]; then
+            [[ -z "$content" ]] && content="${positional_args[0]}"
+        elif [[ $pos_count -eq 2 ]]; then
+            [[ -z "$title_raw" ]] && title_raw="${positional_args[0]}"
+            [[ -z "$content" ]] && content="${positional_args[1]}"
+        fi
+    fi
+    [[ -z "$content" ]] && content="Message"
+
+    local b_tl="╭" b_tr="╮" b_bl="╰" b_br="╯" b_h="─" b_v="│"
+    case "$border_style" in
+        normal) b_tl="┌"; b_tr="┐"; b_bl="└"; b_br="┘"; b_h="─"; b_v="│" ;;
+        double) b_tl="╔"; b_tr="╗"; b_bl="╚"; b_br="╝"; b_h="═"; b_v="║" ;;
+        thick)  b_tl="┏"; b_tr="┓"; b_bl="┗"; b_br="┛"; b_h="━"; b_v="┃" ;;
+        hidden) b_tl=" "; b_tr=" "; b_bl=" "; b_br=" "; b_h=" "; b_v=" " ;;
+    esac
+
+    local preffix_icon="󰋼 " default_color="\033[32m"
+    case "${type}" in 
+      Info) preffix_icon="󰋼 "; default_color="\033[32m";;
+      Error) preffix_icon=" "; default_color="\033[31m";;
+      Warning) preffix_icon=" "; default_color="\033[33m";;
+      Hint) preffix_icon="󰛩 "; default_color="\033[35m";; 
+    esac 
+    [[ "${no_prefix}" == true ]] && preffix_icon=""
+
+    local border_c="${user_border_fg:-$default_color}"
+    local title_c="${user_title_fg:-$border_c}${user_title_bg}"
+    local text_style="${text_modes}${user_fg}${user_bg}"
+    local reset="\033[0m"
+    
+    local title=""
+    local v_title_width=0
+    
+    if [[ -n "$title_raw" ]]; then
+        local full_preffix=""
+        if [[ -n "$preffix_icon" ]]; then
+            local str_pad_l=$(printf "%*s" "$pad_l" "")
+            local str_pad_r=$(printf "%*s" "$pad_r" "")
+            
+            local p_color="${user_preffix_fg}${user_preffix_bg}"
+            if [[ -z "$p_color" ]]; then p_color="${title_c}"; fi
+            
+            if [[ -n "${user_preffix_fg}${user_preffix_bg}" ]]; then
+                full_preffix="${str_pad_l}${p_color}${preffix_icon}${reset}${title_c}${str_pad_r}"
+            else
+                full_preffix="${str_pad_l}${preffix_icon}${str_pad_r}"
+            fi
+            
+            local measure_str="${str_pad_l}${preffix_icon}${str_pad_r}${title_raw}"
+            v_title_width=$(visible_width "$measure_str")
+        else
+            v_title_width=$(visible_width "$title_raw")
+        fi
+        
+        title="${title_c}${full_preffix}${title_raw}${reset}"
+    fi
+
+    [[ "$max_allowed_width" -le 0 || "$max_allowed_width" -gt "$term_cols" ]] && max_allowed_width=$term_cols
+    local inner_width_limit=$((max_allowed_width - 4))
+    content=$(ansi_aware_wrap "$content" "$inner_width_limit")
+
+    IFS=$'\n' read -rd '' -a lines <<< "$content"
+    local calc_width=0
+    for l in "${lines[@]}"; do
+        local s_len=$(visible_width "$l")
+        (( s_len > calc_width )) && calc_width=$s_len
+    done
+
+    local snap_tol=15
+    ([[ "$to_end_tty" == true ]] || (( calc_width >= (inner_width_limit - snap_tol) ))) && calc_width=$inner_width_limit
+    
+    (( v_title_width > calc_width )) && calc_width=$v_title_width
+    [[ $calc_width -gt $inner_width_limit ]] && calc_width=$inner_width_limit
+
+    if [[ -n "$title" ]]; then
+        echo -ne "${border_c}${b_tl}${reset}"
+        
+        local total_h_space=$((calc_width + 2))
+        local filler_len=$((total_h_space - v_title_width))
+        if [[ $filler_len -lt 0 ]]; then filler_len=0; fi
+
+        case "$title_align" in
+            left)
+                echo -ne "${title}${border_c}"
+                for ((i=0; i<filler_len; i++)); do printf "${b_h}"; done
+                ;;
+            right)
+                echo -ne "${border_c}"
+                for ((i=0; i<filler_len; i++)); do printf "${b_h}"; done
+                echo -ne "${reset}${title}"
+                ;;
+            center)
+                local left_fill=$((filler_len / 2))
+                local right_fill=$((filler_len - left_fill))
+                echo -ne "${border_c}"
+                for ((i=0; i<left_fill; i++)); do printf "${b_h}"; done
+                echo -ne "${reset}${title}${border_c}"
+                for ((i=0; i<right_fill; i++)); do printf "${b_h}"; done
+                ;;
+        esac
+        echo -ne "${border_c}${b_tr}${reset}\n"
+    else
+        echo -ne "${border_c}${b_tl}"
+        for ((i=0; i<calc_width+2; i++)); do printf "${b_h}"; done
+        printf "${b_tr}${reset}\n"
+    fi
+
+    for line in "${lines[@]}"; do
+        local len=$(visible_width "$line")
+        printf "${border_c}${b_v}${reset} ${text_style}%b${reset}%*s ${border_c}${b_v}${reset}\n" "$line" $((calc_width - len)) ""
+    done
+
+    printf "${border_c}${b_bl}"
+    for ((i=0; i<calc_width+2; i++)); do printf "${b_h}"; done
+    printf "${b_br}${reset}\n"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    messagebox "${@}"
+fi
