@@ -6,7 +6,7 @@ A tool for shell scripts. Leverage the power of Bubbles and Lip Gloss in your sc
 You can customize `bash-utils` options and styles with --flags. See `bash-utils` <command> --help for a full view of each command's customization and configuration options.
 
 ```bash 
-gum input --prompt.foreground "212" \
+./bash-utils input --prompt.foreground "212" \
           --placeholder "What's up?" \
           --prompt "* " \
           --width 80 \
