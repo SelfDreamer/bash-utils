@@ -267,6 +267,40 @@ Show beautifiul text in terminal, with gradient effect!
 
 ---
 
+# Examples
+
+How to use gum in your daily workflows:
+
+- Write a commit message:
+```bash 
+git commit -m "$(./bash-utils input --width 50 --placeholder "Summary of changes")" 
+```
+
+- Open files in your **$EDITOR**
+
+```bash 
+"${EDITOR:?}" $(./bash-utils filter)
+```
+
+- Pick a commit hash from git history
+
+```bash 
+./bash-utils filter <<< $(git log --oneline) | cut -d' ' -f1 
+```
+
+- Update packages **(Debian)**
+
+```bash 
+apt list --upgradable 2>/dev/null | grep '/' | tail -n10 | awk -F'/' '{print $1}' | ./bash-utils filter --placeholder="Selecciona paquete para actualizar..." --indicator="→"
+```
+- `sudo` replacement
+
+```bash 
+alias please='./bash-utils input --password --placeholder "Contraseña para sudo..." | sudo -S ${@}'
+```
+
+---
+
 <div align="center">
     A tool inspired by <a href="https://github.com/charmbracelet/gum">gum</a>, I hope you like it!! ^^
 </div>
