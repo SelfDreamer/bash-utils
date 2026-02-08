@@ -40,6 +40,8 @@ Prompt for some multi-line text (ctrl+d to complete text entry).
 ./bash-utils write > story.txt
 ```
 
+https://github.com/user-attachments/assets/e0a1f7d6-846a-49ef-81a9-e310a2749d1d
+
 --- 
 
 # Filter
@@ -54,6 +56,8 @@ echo Banana >> flavors.txt
 echo Cherry >> flavors.txt
 ./bash-utils filter < flavors.txt > selection.txt 
 ```
+
+https://github.com/user-attachments/assets/30881c4f-bd94-41a3-bb75-c5441a0e900b
 
 Select multiple options with the `--limit` flag or `--no-limit` flag. Use `tab` or `ctrl+space` to select, enter to confirm.
 
@@ -76,6 +80,8 @@ CARD=$(./bash-utils choose --height 15 {{A,K,Q,J},{10..2}}" "{♠,♥,♣,♦})
 echo "Was your card the ${CARD:?}?"
 ```
 
+https://github.com/user-attachments/assets/8d5cb248-96c9-4afd-8213-461c40228a4c
+
 You can also select multiple items with the --limit or --no-limit flag, which determines the maximum of items that can be chosen.
 
 ```bash
@@ -95,6 +101,8 @@ Confirm whether to perform an action. Exits with code 0 (affirmative) or 1 (nega
 ./bash-utils confirm && rm file.txt || echo "File not removed"
 ```
 
+https://github.com/user-attachments/assets/ee751930-3a81-43eb-904c-5d1c80ad6d31
+
 ---
 
 # File
@@ -106,6 +114,8 @@ Prompt the user to select a file from the file tree.
 ```bash 
 ${EDITOR:-nano} $(gum file "${HOME:?}")
 ```
+
+https://github.com/user-attachments/assets/f82c7aab-fd5e-45e5-8ac7-64379ac5d58e
 
 > [!TIP] Tip 
 > Or, so much better!
@@ -137,6 +147,8 @@ Scroll through a long document with line numbers and a fully customizable viewpo
 ./bash-utils pager < README.md 
 ```
 
+https://github.com/user-attachments/assets/871a1947-72ae-4648-876b-8b7948b5aaf1
+
 ---
 
 # Spin
@@ -151,6 +163,8 @@ To view or pipe the command's output, use the --show-output flag.
 ./bash-utils spin --spinner dot --title "Buying Bubble Gum..." -- sleep 5
 ```
 
+https://github.com/user-attachments/assets/f207c0e6-38f6-4d9e-90c3-6f9b23276aef
+
 ---
 
 Available spinner types include: `dot`,`line`,`minidot`,`jump`,`pulse`,`points`,`globe`,`moon`,`monkey`,`meter`,`hamburger`,`standard`,`bar`,`process`.
@@ -159,13 +173,15 @@ Available spinner types include: `dot`,`line`,`minidot`,`jump`,`pulse`,`points`,
 
 ---
 
-Select a row from some tabular data.
+Show data into terminal with beautifiul output.
 
 ```bash 
 ./bash-utils table < flavors.csv | cut -d ',' -f 1 
 # Or using files 
 ls -lh | awk '{print $9 "," $2}' | ./bash-utils table --columns "Permisos,Propietario" --border-foreground=212 
 ```
+
+https://github.com/user-attachments/assets/32aa955c-d0f8-4b35-9009-9e3146ae303f
 
 ---
 
@@ -176,11 +192,13 @@ ls -lh | awk '{print $9 "," $2}' | ./bash-utils table --columns "Permisos,Propie
 Pretty print any string with any layout with one command.
 
 ```bash 
-gum style \
+./bash-utils style \
 	--foreground 212 --border-foreground 212 --border double \
 	--align center --width 50 --margin "1 2" --padding "2 4" \
 	'Bubble Gum (1¢)' 'So sweet and so fresh!'
 ```
+
+<div align=center><img width="1879" height="495" alt="image" src="https://github.com/user-attachments/assets/1bd1c7a9-4b60-4f22-8253-b6346a1ff4aa" /></div>
 
 ---
 
@@ -192,16 +210,18 @@ log logs messages to the terminal at using different levels
 
 ```bash 
 # Log some debug information.
-gum log --structured --level debug "Creating file..." name file.txt
+./bash-utils log --level debug "Creating file..." name file.txt
 # DEBUG Unable to create file. name=temp.txt
 
 # Log some error.
-gum log --structured --level error "Unable to create file." name file.txt
+./bash-utils log --level error "Unable to create file." name file.txt
 # ERROR Unable to create file. name=temp.txt
 
 # Include a timestamp.
-gum log --time rfc822 --level error "Unable to create file."
+./bash-utils log --time rfc822 --level error "Unable to create file."
 ```
+
+<img width="1883" height="173" alt="image" src="https://github.com/user-attachments/assets/55a83378-9cdc-4705-ab89-73d429aa650a" />
 
 ---
 
@@ -227,6 +247,9 @@ logs message into box
   --preffix.foreground=""
 ```
 
+<img width="1889" height="757" alt="image" src="https://github.com/user-attachments/assets/fdb45d2b-45b3-4531-917d-f43417a360c4" />
+
+
 ---
 
 # Text 
@@ -238,6 +261,8 @@ Show beautifiul text in terminal, with gradient effect!
 ```bash 
 ./bash-utils text "♥ https://SelfDreamer.github.io" --bold --align=center 
 ```
+
+<img width="1887" height="110" alt="image" src="https://github.com/user-attachments/assets/fa2e0320-4950-406d-8b39-fb1c950529b0" />
 
 ---
 
