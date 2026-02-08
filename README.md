@@ -80,7 +80,8 @@ CARD=$(./bash-utils choose --height 15 {{A,K,Q,J},{10..2}}" "{♠,♥,♣,♦})
 echo "Was your card the ${CARD:?}?"
 ```
 
-https://github.com/user-attachments/assets/8d5cb248-96c9-4afd-8213-461c40228a4c
+https://github.com/user-attachments/assets/3292b743-1068-4ba8-928b-dd28d44a0279
+
 
 You can also select multiple items with the --limit or --no-limit flag, which determines the maximum of items that can be chosen.
 
