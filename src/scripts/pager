@@ -432,7 +432,7 @@ EOF
                 
                 content = sprintf("%"NUM_W"d", l_no)
                 if (is_empty) content = sprintf("%"NUM_W"s", "~")
-                if (is_cont)  content = sprintf("%"NUM_W"s", ".")
+                if (is_cont)  content = sprintf("%"NUM_W"s", "")
                 
                 return S_NUM pad_nl_str content pad_nr_str RESET pad_sl_str S_SEP SEP_CHAR RESET pad_sr_str S_TXT
             }
