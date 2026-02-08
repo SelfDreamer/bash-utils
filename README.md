@@ -26,6 +26,8 @@ Prompt for input with a simple command.
 ./bash-utils input --password > password.txt
 ```
 
+https://github.com/user-attachments/assets/fd38d407-42cd-4d33-8f03-33d22bfbb969
+
 ---
 
 # Write
