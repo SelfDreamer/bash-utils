@@ -170,7 +170,7 @@ EOF
                 ;;
             'y'|'Y') selected_idx=0; draw_buttons; break ;;
             'n'|'N') selected_idx=1; draw_buttons; break ;;
-            "") break ;; # Enter
+            "") break ;; 
             'q') 
                 if [[ "$show_help_footer" == "true" ]]; then echo -ne "\n\e[2K\e[1A" >&2; fi
                 echo -ne "\r\e[2K\e[1A\e[2K\r" >&2

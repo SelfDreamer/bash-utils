@@ -113,7 +113,7 @@ https://github.com/user-attachments/assets/ee751930-3a81-43eb-904c-5d1c80ad6d31
 Prompt the user to select a file from the file tree.
 
 ```bash 
-${EDITOR:-nano} $(gum file "${HOME:?}")
+${EDITOR:-nano} $(./bash-utils file "${HOME:?}")
 ```
 
 https://github.com/user-attachments/assets/f82c7aab-fd5e-45e5-8ac7-64379ac5d58e
@@ -269,7 +269,7 @@ Show beautifiul text in terminal, with gradient effect!
 
 # Examples
 
-How to use gum in your daily workflows:
+How to use **bash-utils** in your daily workflows:
 
 - Write a commit message:
 ```bash 

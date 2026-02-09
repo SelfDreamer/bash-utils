@@ -265,7 +265,6 @@ EOF
       esac 
     done 
 
-    # --- VALIDACIONES ---
     case "$border_style" in
         rounded|normal|double|thick|hidden) ;;
         *) echo "Error: Invalid value for --border: '$border_style'" >&2; return 1 ;;

@@ -227,13 +227,11 @@ EOF
     local reset="\033[0m"
     local output_line=""
 
-    # 1. Time
     if [[ -n "$timestamp" ]]; then
         local t_style="${s_time_fg:-$(get_style_seq "fg" "240")}${s_time_bg}"
         output_line+="${t_style}${timestamp}${reset} "
     fi
 
-    # 2. Level
     if [[ "$log_level" != "none" ]]; then
         local lvl_str="${log_level^^}"
         printf -v lvl_str "%-6s" "$lvl_str"
@@ -247,13 +245,11 @@ EOF
         output_line+="${l_color}${s_lvl_bg}${lvl_str}${reset} "
     fi
 
-    # 3. Prefix
     if [[ -n "$prefix" ]]; then
         local p_style="${s_pre_fg:-$(get_style_seq "fg" "212")}${s_pre_bg}"
         output_line+="${p_style}${prefix}${reset} "
     fi
 
-    # 4. Message
     local m_style="${s_msg_fg}${s_msg_bg}"
     output_line+="${m_style}${message}${reset}"
 
@@ -269,7 +265,6 @@ EOF
         done
     fi
 
-    # Print a STDERR
     printf "%b\n" "$output_line" >&2
 
     if [[ -n "$output_file" ]]; then

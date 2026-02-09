@@ -12,7 +12,6 @@ function cmd_input() {
         echo "$seq"
     }
 
-    # --- DEFAULTS ---
     local width=40
     local prompt_char="> "
     local placeholder="Type something..."
@@ -21,7 +20,6 @@ function cmd_input() {
     local char_limit=0
     local is_password=false
     
-    # Colores
     local c_cursor_fg="255"
     local c_cursor_bg="212"
     local c_prompt_fg="240"
@@ -57,7 +55,6 @@ Style Flags:
 EOF
     }
 
-    # --- INPUT ---
     local args_options=()
     local parse_args=()
     
@@ -75,7 +72,6 @@ EOF
     
     set -- "${parse_args[@]}"
 
-    # --- PARSEO ---
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -h|--help) show_help_panel; return 0 ;;
@@ -195,21 +191,21 @@ EOF
             read -rsn5 -t 0.01 seq < /dev/tty
             
             case "$seq" in
-                "[C") # Right
+                "[C") 
                     ((cursor_pos++))
                     if ((cursor_pos > ${#value})); then cursor_pos=${#value}; fi
                     ;;
-                "[D") # Left
+                "[D") 
                     ((cursor_pos--))
                     if ((cursor_pos < 0)); then cursor_pos=0; fi
                     ;;
-                "[H"|"[1~"|"[7~"|"OH") # Home
+                "[H"|"[1~"|"[7~"|"OH") 
                     cursor_pos=0
                     ;;
-                "[F"|"[4~"|"[8~"|"OF") # End
+                "[F"|"[4~"|"[8~"|"OF") 
                     cursor_pos=${#value}
                     ;;
-                "[3~") # Supr / Delete
+                "[3~") 
                     if (( cursor_pos < ${#value} )); then
                         local left="${value:0:cursor_pos}"
                         local right="${value:cursor_pos+1}"
@@ -218,13 +214,13 @@ EOF
                     ;;
             esac
 
-        elif [[ "$key" == "" ]]; then # Enter
+        elif [[ "$key" == "" ]]; then 
             echo -ne "${ESC}[${total_lines}A${ESC}[J" >&2
             tput cnorm >&2
             echo "$value"
             return 0
 
-        elif [[ "$key" == $'\x7f' || "$key" == $'\b' ]]; then # Backspace
+        elif [[ "$key" == $'\x7f' || "$key" == $'\b' ]]; then 
             if (( cursor_pos > 0 )); then
                 local left="${value:0:cursor_pos-1}"
                 local right="${value:cursor_pos}"
@@ -232,7 +228,7 @@ EOF
                 ((cursor_pos--))
             fi
             
-        elif [[ "$key" == $'\x03' ]]; then # Ctrl+C
+        elif [[ "$key" == $'\x03' ]]; then 
              echo -ne "${ESC}[${total_lines}A${ESC}[J" >&2
              tput cnorm >&2
              return 130
