@@ -118,7 +118,7 @@ ${EDITOR:-nano} $(./bash-utils file "${HOME:?}")
 
 https://github.com/user-attachments/assets/f82c7aab-fd5e-45e5-8ac7-64379ac5d58e
 
-> [!TIP] Tip 
+> [!Tip] 
 > Or, so much better!
 >
 > ```bash
