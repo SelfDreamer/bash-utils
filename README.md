@@ -285,6 +285,8 @@ BUBBLE_GUM=$(./bash-utils join "$BUBBLE" "$GUM")
 ./bash-utils join --align center --vertical "$I_LOVE" "$BUBBLE_GUM"
 ```
 
+<img width="1021" height="218" alt="image" src="https://github.com/user-attachments/assets/8a1c63eb-3a5a-4e96-90e3-d7350035b081" />
+
 ---
 
 # Examples
