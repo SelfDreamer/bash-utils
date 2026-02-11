@@ -10,7 +10,7 @@ function cmd_pager() {
         function p_sec() { printf "\n%s\n" "$1"; }
 
         cat <<EOF
-Usage: cmd_pager [<file>] [flags]
+Usage: bash-utils [<file>] [flags]
 
 A robust, boxed file pager (TTY Safe Edition).
 

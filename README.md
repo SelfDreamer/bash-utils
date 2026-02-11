@@ -267,6 +267,26 @@ Show beautifiul text in terminal, with gradient effect!
 
 ---
 
+# Join
+
+Combine text vertically or horizontally. Use this command with `bash-utils` style to build layouts and pretty output.
+
+> [!Tip]
+> Always wrap the output of gum style in quotes to preserve newlines (\n) when using it as an argument in the join command.
+
+```bash 
+I=$(./bash-utils style --padding "1 5" --border double --border-foreground 212 "I")
+LOVE=$(./bash-utils style --padding "1 4" --border double --border-foreground 57 "LOVE")
+BUBBLE=$(./bash-utils style --padding "1 8" --border double --border-foreground 255 "Bubble")
+GUM=$(./bash-utils style --padding "1 5" --border double --border-foreground 240 "Gum")
+
+I_LOVE=$(./bash-utils join "$I" "$LOVE")
+BUBBLE_GUM=$(./bash-utils join "$BUBBLE" "$GUM")
+./bash-utils join --align center --vertical "$I_LOVE" "$BUBBLE_GUM"
+```
+
+---
+
 # Examples
 
 How to use **bash-utils** in your daily workflows:

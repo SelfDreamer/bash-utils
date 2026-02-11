@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+
+strip_ansi() {
+    sed -E '
+        s/\x1b\]8;;[^\x1b]*\x1b\\//g;
+        s/\x1b\][^\x1b\x07]*(\x07|\x1b\\)//g;
+        s/\x1b\[[0-9;?]*[ -/]*[@-~]//g;
+        s/\[[0-9;]*m//g;
+        s/(^|[[:space:]])[0-9]+m/\1/g;
+        s/[0-9]{1,3}m//g;
+        s/[\x07\x1b]//g
+    ' <<< "${1}"
+}
+
+function cmd_join() {
+    
+    function die() {
+        echo -e "\033[31mError: $1\033[0m" >&2
+        return 1
+    }
+
+    function check_literal() {
+        local param_name="$1"; local value="$2"; shift 2; local options=("$@")
+        local found=false
+        for opt in "${options[@]}"; do
+            if [[ "$value" == "$opt" ]]; then found=true; break; fi
+        done
+        if [[ "$found" == "false" ]]; then
+            local list_str=$(IFS=, ; echo "${options[*]}")
+            echo "gum: error: invalid value for --$param_name: \"$value\"" >&2
+            echo "Valid options: $list_str" >&2
+            return 1
+        fi
+        return 0
+    }
+
+    function show_help_panel() {
+        cat <<EOF
+Usage: bash-utils join [flags] <text> ...
+
+Join text vertically or horizontally.
+
+Arguments:
+  <text> ...                Text blocks to join
+
+Flags:
+  -h, --help                Show context-sensitive help.
+      --horizontal          Join horizontally (default)
+      --vertical            Join vertically
+      --align="left"        Alignment (top, center, bottom, left, right)
+EOF
+    }
+
+    local direction="horizontal"
+    local align="top" 
+    local args_text=()
+    local parse_args=()
+
+    while [[ $# -gt 0 ]]; do
+        if [[ "$1" == --*=* ]]; then
+            parse_args+=("${1%%=*}" "${1#*=}")
+        else
+            parse_args+=("$1")
+        fi
+        shift
+    done
+    set -- "${parse_args[@]}"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) show_help_panel; return 0 ;;
+            --horizontal) direction="horizontal" ;;
+            --vertical)   direction="vertical" ;;
+            
+            --align)
+                if [[ $# -lt 2 || "$2" == -* ]]; then
+                    die "Flag '--align' requires an argument." || return 1
+                fi
+                align="$2"; shift ;;
+            
+            -*) die "Unknown flag: $1" || return 1 ;;
+            *) args_text+=("$1") ;;
+        esac
+        shift
+    done
+
+    if [[ ${#args_text[@]} -eq 0 ]]; then
+        if [[ -p /dev/stdin ]]; then
+            local input
+            input=$(cat -)
+            if [[ -z "$input" ]]; then
+                show_help_panel >&2
+                return 1
+            fi
+            args_text+=("$input")
+        else
+            show_help_panel >&2
+            return 1
+        fi
+    fi
+
+    check_literal "align" "$align" "top" "center" "bottom" "left" "right" || return 1
+
+    if [[ "$direction" == "horizontal" ]]; then
+        [[ "$align" == "left" ]] && align="top"
+        [[ "$align" == "right" ]] && align="bottom"
+    else
+        [[ "$align" == "top" ]] && align="left"
+        [[ "$align" == "bottom" ]] && align="left"
+    fi
+
+    if [[ "$direction" == "vertical" ]]; then
+        if [[ "$align" == "left" ]]; then
+            for block in "${args_text[@]}"; do echo -e "$block"; done
+            return 0
+        fi
+
+        local max_w=0
+        for block in "${args_text[@]}"; do
+            while IFS= read -r line; do
+                local clean=$(strip_ansi "$line")
+                local len=${#clean}
+                if (( len > max_w )); then max_w=$len; fi
+            done <<< "$block"
+        done
+
+        for block in "${args_text[@]}"; do
+            while IFS= read -r line; do
+                local clean=$(strip_ansi "$line")
+                local len=${#clean}
+                local diff=$((max_w - len))
+                local pad_l=0
+                local pad_r=0
+                
+                if [[ "$align" == "center" ]]; then
+                    pad_l=$((diff / 2))
+                    pad_r=$((diff - pad_l))
+                elif [[ "$align" == "right" ]]; then
+                    pad_l=$diff
+                fi
+                
+                printf "%*s%s%*s\n" "$pad_l" "" "$line" "$pad_r" ""
+            done <<< "$block"
+        done
+        return 0
+    fi
+
+    local temp_dir
+    temp_dir=$(mktemp -d) || return 1
+    
+    local max_h=0
+    local i=0
+    local file_list=()
+
+    for block in "${args_text[@]}"; do
+        local f="$temp_dir/$i"
+        echo -e "$block" > "$f"
+        local lines=$(wc -l < "$f")
+        if (( lines > max_h )); then max_h=$lines; fi
+        file_list+=("$f")
+        ((i++))
+    done
+
+    if [[ "$align" != "top" ]]; then
+        for ((j=0; j<i; j++)); do
+            local f="${file_list[$j]}"
+            local lines=$(wc -l < "$f")
+            local diff=$((max_h - lines))
+            
+            if (( diff > 0 )); then
+                local pad_top=0
+                local pad_bottom=0
+                
+                if [[ "$align" == "center" ]]; then
+                    pad_top=$((diff / 2))
+                    pad_bottom=$((diff - pad_top))
+                elif [[ "$align" == "bottom" ]]; then
+                    pad_top=$diff
+                fi
+                
+                local content=$(cat "$f")
+                : > "$f"
+                
+                for ((k=0; k<pad_top; k++)); do echo "" >> "$f"; done
+                echo "$content" >> "$f"
+                for ((k=0; k<pad_bottom; k++)); do echo "" >> "$f"; done
+            fi
+        done
+    fi
+
+    paste -d '' "${file_list[@]}"
+
+    rm -rf "$temp_dir"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  cmd_join "${@}"
+fi

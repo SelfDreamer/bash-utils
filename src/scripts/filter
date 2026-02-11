@@ -60,7 +60,7 @@ function cmd_filter() {
         function p_sec() { printf "\n%s\n" "$1"; }
 
         cat <<EOF >&2
-Usage: gum filter [<options> ...] [flags]
+Usage: bash-utils filter [<options> ...] [flags]
 
 Filter items from a list
 

@@ -140,6 +140,15 @@ function __pager(){
     fi
 }
 
+function __join(){
+  if [[ -f "${REALPATH}/src/scripts/join" ]]; then 
+    source "${REALPATH}/src/scripts/join"
+    cmd_join "${@}"
+  else 
+    echo "Error: 'join' not found"
+  fi 
+} 
+
 function helpPanel(){
   msg="Usage: ${SELF} <command> [flags]
 
@@ -163,6 +172,7 @@ Commands:
   ${blue}text${end}               Show a beautifiul text
   ${blue}style${end}              Apply coloring, borders, spacing to text
   ${blue}pager${end}              Scroll through a file
+  ${blue}join${end}             Join text vertically or horizontally
 
 Run \"${SELF} <command> --help\" for more information on a command."""
 
@@ -170,20 +180,16 @@ Run \"${SELF} <command> --help\" for more information on a command."""
   return 0 
 } 
 
-# --- FUNCIÓN PRINCIPAL ---
 
 function main(){
-  # 1. Si no hay argumentos, mostramos ayuda
   if [[ -z "$1" ]]; then
       helpPanel
       exit 1
   fi
 
-  # 2. Capturamos el subcomando y hacemos shift
   local subcmd="$1"
   shift 
 
-  # 3. Enrutamos al comando correcto
   case "$subcmd" in
       file)
           __cmd_file "$@"
@@ -224,11 +230,13 @@ function main(){
       pager)
         __pager "${@}"
         ;;
+      join)
+        __join "${@}"
+        ;;
       -h|--help)
           helpPanel
           ;;
       *)
-          # echo -e "${red}Error: Comando '$subcmd' no reconocido.${end}"
           helpPanel
           echo -e "\n${red}${SELF}: error: expected one of \"choose\", \"confirm\", \"file\", ...${end}\n"
 
@@ -237,5 +245,4 @@ function main(){
   esac
 }
 
-# Pasamos todos los argumentos al main
 main "${@}"

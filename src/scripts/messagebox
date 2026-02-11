@@ -121,7 +121,7 @@ function messagebox() {
 
     function show_help() {
         cat <<EOF
-Usage: messagebox [flags] [Message]
+Usage: bash-utils messagebox [flags] [Message]
        messagebox [flags] [Title] [Message]
 
 Flags:
